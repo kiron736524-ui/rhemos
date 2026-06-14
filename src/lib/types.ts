@@ -18,9 +18,18 @@ export interface Asset {
   inspections?: InspectionResult[];
 }
 
+/** 成熟方案：一物三用——给用户看的方案 / 跨视图不变量 / 判图基准 */
+export interface DesignSpec {
+  narrative: string; // 给用户看的中文方案
+  invariants: string[]; // 跨视图不可变量（多视图一致性用）
+  selfCheckCriteria: string; // 供 inspect 的客观判图要点（"输出 vs spec"）
+  updatedAt: string;
+}
+
 export interface ProjectState {
   id: string;
   brief: Record<string, unknown>; // Phase 1 用自由记录；强类型 BoothBrief 后续替换
+  spec?: DesignSpec;
   assets: Asset[];
   updatedAt: string;
 }

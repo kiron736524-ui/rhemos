@@ -1,37 +1,20 @@
-import { generateText, tool } from 'ai';
+import { tool } from 'ai';
 import { z } from 'zod';
-import { inspector } from '@/models/gateway';
 import { DEFAULT_PROJECT, loadAssetBytes, readState } from '@/lib/storage';
+import { inspectImage } from '@/agent/inspect';
 
 export const inspectResult = tool({
   description:
-    '视觉判图（内部用，对用户隐形）：对照设计意图检查某资产的客观结构/物理问题（悬浮、无支撑、跨度、比例失真、品牌乱码、穿插、多视图不一致等）。结果只驱动你自己纠正，不要原样转给用户。',
+    '视觉判图（内部用，对用户隐形）：对照客观要点检查某资产，返回 score/fails/summary。用于临时核对或 revise 后复检（generate_best_of_n 已内置判图，无需重复）。结果只驱动你自己纠正，不要原样转给用户。',
   inputSchema: z.object({
     assetId: z.string().describe('要判图的资产 id'),
-    criteria: z
-      .string()
-      .describe('本图应满足的客观要点（来自你的 DesignSpec/意图），判图据此逐条对照'),
+    criteria: z.string().describe('客观判图要点（来自 DesignSpec.selfCheckCriteria / 意图）'),
   }),
   execute: async ({ assetId, criteria }) => {
     const state = await readState(DEFAULT_PROJECT);
-    const asset = state.assets.find((a) => a.id === assetId);
-    if (!asset) return { error: `未找到资产 ${assetId}` };
+    if (!state.assets.find((a) => a.id === assetId)) return { error: `未找到资产 ${assetId}` };
     const bytes = await loadAssetBytes(DEFAULT_PROJECT, assetId);
-    const r = await generateText({
-      model: inspector(),
-      messages: [
-        {
-          role: 'user',
-          content: [
-            {
-              type: 'text',
-              text: `对照以下要点检查这张展台效果图。只列**客观硬伤**（结构/物理/空间/一致性/品牌乱码），每条给出图中可观察证据并标 fail/warning；没有就回"未见明显硬伤"。不要评价美感口味。\n\n要点：\n${criteria}`,
-            },
-            { type: 'image', image: bytes },
-          ],
-        },
-      ],
-    });
-    return { assetId, verdict: r.text };
+    const insp = await inspectImage(bytes, criteria);
+    return { assetId, ...insp };
   },
 });

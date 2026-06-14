@@ -1,9 +1,9 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
-import type { Asset, ProjectState } from './types';
+import type { Asset, DesignSpec, ProjectState } from './types';
 
-// Phase 1：本地文件系统存储（暂不接 DB/Blob）。单一默认 project。
+// Phase 1-2：本地文件系统存储（暂不接 DB/Blob）。单一默认 project。
 const ROOT = path.join(process.cwd(), '.data', 'projects');
 export const DEFAULT_PROJECT = 'default';
 
@@ -25,6 +25,13 @@ export async function writeState(state: ProjectState): Promise<void> {
   await writeFile(statePath(state.id), JSON.stringify(state, null, 2), 'utf8');
 }
 
+export async function setSpec(id: string, spec: DesignSpec): Promise<void> {
+  const state = await readState(id);
+  state.spec = spec;
+  await writeState(state);
+}
+
+// 注意：并行生图时不要并行调用本函数（会竞写 state.json）。先并行生成字节，再顺序保存。
 export async function saveAsset(
   id: string,
   bytes: Uint8Array,
