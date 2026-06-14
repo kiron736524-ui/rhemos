@@ -14,6 +14,9 @@
 .env.local
 .env*.local
 
+# 本地数据与生成产物（图片 / project state / spike 输出）
+/.data/
+
 # Vercel
 .vercel
 
