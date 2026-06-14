@@ -1,4 +1,5 @@
 import { gateway } from '@ai-sdk/gateway';
+import OpenAI from 'openai';
 
 /**
  * 所有模型调用经 Vercel AI Gateway（唯一来源，ASR 除外）。
@@ -34,3 +35,14 @@ export const imageModel = () => gateway.imageModel(MODEL_IDS.image);
 /** 视觉判图器（默认 Sonnet 4.6，可传入候选 id 切换/升级） */
 export const inspector = (id: string = MODEL_IDS.inspect) =>
   gateway.languageModel(id);
+
+/**
+ * 生图走 Gateway 的 OpenAI 兼容端点（OpenAI SDK 直连），以精确控制 quality/size/n。
+ * 实测：AI SDK generateImage 与 Gateway 图像端点均不支持 partial_images 流式、不采纳 output_format=jpeg（强制 PNG）。
+ */
+export const GATEWAY_OPENAI_BASE = 'https://ai-gateway.vercel.sh/v1';
+export const openaiViaGateway = () =>
+  new OpenAI({ apiKey: process.env.AI_GATEWAY_API_KEY, baseURL: GATEWAY_OPENAI_BASE });
+
+/** best-of-N 并发上限（成本控制；Phase 2 best-of-N 用） */
+export const MAX_PARALLEL_IMAGES = 2;
