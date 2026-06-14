@@ -223,10 +223,14 @@ loop (大脑自主):
 - [ ] `useChat` + AI Elements `Conversation`/`Tool` 链路；本地 storage
 - **验收**：发请求 → 看到工具调用与自省过程 → 拿到结果；**大脑能正确分解 + 调度 + 智能提问**（诉求 1、2 初步成立）。
 
-### Phase 2 · 自省闭环（核心价值主张）
-- [ ] DesignSpec 写作 + `update_spec`；`revise_asset`（gpt-image-2 编辑）；`budget.ts` 重试预算
-- [ ] inspection rubric 完整化；system prompt v2（写死"生成必先 inspect、偏差自主 revise"工作习惯）
-- **验收**：大脑能「写方案 → 生图 → 自检 → 写纠正 prompt → revise → 再检 → 通过/诚实放弃」自主跑完（诉求 3 成立）。
+### Phase 2 · 自省闭环（核心价值主张）· 横向优先
+> **实测（2026-06-14）**：4 张 gpt-image-2 并行 = 墙钟 82s ≈ 单张（串行需 279s），4/4 成功无 429。**Gateway 真并发** → best-of-N 几乎不增延迟。另：1024×1024 ~50-82s，远快于 1536×1024 ~190s（画幅决定速度）。
+- [ ] **best-of-N 并行生图（主力杠杆）**：`generate_booth_variants(prompt|prompts, n)` 内部 `Promise.all` 并行 N 张；inspect 也并行；静默择优交付。**横向抽奖优先于纵向重试。**
+- [ ] DesignSpec 写作 + `update_spec`（存 project state，供 inspect 做"输出 vs spec"硬对比）
+- [ ] `revise_asset`（gpt-image-2 编辑模式）作**窄回退**：仅对择优后仍存的客观硬伤定向修 ≤1 次
+- [ ] 正式预算 `budget.ts`（替换 Phase 1 兜底）+ **并发上限 + 429 退避**；大脑按"分量"选 N 与画幅（概念 1-2@1024 ~60s；最终 4-6@1536 并行 + 择优）
+- [ ] inspection rubric 完整化；system prompt v2
+- **验收**：大脑能「写方案 → 并行 N 张 → 静默判图择优 → 必要时定向修 1 次 → 交付」自主跑完，且总延迟接近单张。
 
 ### Phase 3 · 一致性 subagent
 - [ ] `render_multiview` 委派 `subagents/consistency.ts`（identity spec + camera spec + anchor）
