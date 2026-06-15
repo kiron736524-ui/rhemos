@@ -30,5 +30,8 @@
 - **D15 · `.env.local` / `.data/` 绝不入库**（`.gitignore`）。`.env.local` 含 `AI_GATEWAY_API_KEY`、`DASHSCOPE_API_KEY`。
 - **D16 · 历史泄露提醒**：旧 `~/meta rhema/过程提示词和图标/rhemax-260415-*.json` 是 GCP 服务账号私钥（旧 Vertex 项目），**未带入 rhemos**，建议去 GCP 轮换/删除。
 
+## 多视图（Phase 3 方向）
+- **D17 · 多视图 = 单图 turnaround sheet（一张图四视角），非四张独立图**。实测（`scripts/multiview-spike.mjs`）：`images.edit` 图像条件化经 Gateway **404 不可用**；单图 sheet **一次渲染 = 天然同一展台**（Sonnet 判 72，前/左/右/俯视平面自洽），而分图独立生成会漂（正是 rhemax 全套锁定机制的根因）。故走 sheet。改进：prompt **强制角度分明** + best-of-N 选最一致 + 提高画幅(1536)/quality。**per-角度独立高清重绘**（用户满意后单独做）属 drift 回归的难活，**暂缓**。落点：Phase 3 `render_multiview_sheet` 工具 + 重写 `multiview.md`（删锁定机制）。
+
 ## 进度
 Phase 0（接线 + 连通 spike）· Phase 1（最小 Loop Agent：澄清 + 智能提问）· Phase 2（best-of-N 自省闭环）已完成并实测。**Phase 3**（一致性 subagent，多视图）/ **Phase 4**（ASR、持久化、approval 闸门、成本监控、AI Elements）未做 —— 见 `engineering-plan.md`。

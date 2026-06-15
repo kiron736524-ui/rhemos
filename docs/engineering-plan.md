@@ -232,9 +232,13 @@ loop (大脑自主):
 - [ ] inspection rubric 完整化；system prompt v2
 - **验收**：大脑能「写方案 → 并行 N 张 → 静默判图择优 → 必要时定向修 1 次 → 交付」自主跑完，且总延迟接近单张。
 
-### Phase 3 · 一致性 subagent
-- [ ] `render_multiview` 委派 `subagents/consistency.ts`（identity spec + camera spec + anchor）
-- **验收**：多视图一致；主循环上下文不被十几轮检查日志撑爆。
+### Phase 3 · 多视图（单图 turnaround sheet）· 实测定型
+> 实测（`scripts/multiview-spike.mjs`）：`images.edit` 图像条件化经 Gateway **404 不可用**；单图 sheet 一次渲染**天然一致**(Sonnet 72，胜分图)。故**弃 rhemax 全套锁定机制**（不再做 identity-spec 重注入/坐标锚图/失败重试/十几轮 subagent）。
+- [ ] `render_multiview_sheet` 工具：best-of-N 出 2×2 turnaround sheet（前/左/右/俯视平面，**默认 high/1536，n≤2 并行**）→ Sonnet 判（同一展台 + 角度分明 + 平面合理）择优 → 交付。
+- [ ] 重写 `src/knowledge/skills/multiview.md`：sheet prompt 模板（**强制角度分明 + 平面图**），删除锁定机制。
+- [ ] 注册工具 + system-prompt 告知大脑何时用（用户要"多视角全貌"）；单张 money shot 仍走 hero best-of-N。
+- [ ] （暂缓）per-角度独立高清重绘：用户满意 sheet 后再单独高清化。
+- **验收**：一句"给我多视角全貌" → 大脑出一张四视角自洽的 sheet。
 
 ### Phase 4 · 工程化收尾
 - [ ] ASR（DashScope）接入；成本监控；approval 边界（若引入破坏性操作）；前瞻预热（可选）
