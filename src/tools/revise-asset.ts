@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { MODEL_IDS, withRenderStyle, generateImageFromRefs } from '@/models/gateway';
 import { addInspection, loadAssetBytes, projectIdFromContext, saveAsset } from '@/lib/storage';
 import { inspectImage, toInspectionResult } from '@/agent/inspect';
+import type { Deliverable } from '@/lib/types';
 
 export const reviseAsset = tool({
   description:
@@ -28,6 +29,13 @@ export const reviseAsset = tool({
     const asset = await saveAsset(pid, bytes, { kind: 'booth-image', prompt: `revise: ${fix}`, parentId: parentAssetId });
     const insp = await inspectImage(bytes, criteria);
     await addInspection(pid, asset.id, toInspectionResult(insp, MODEL_IDS.inspect));
-    return { assetId: asset.id, url: asset.url, score: insp.score, fails: insp.fails, summary: insp.summary };
+    // 统一交付协议（D24 契约①）：单张修订图。
+    const deliverable: Deliverable = {
+      type: 'revision',
+      assets: [{ assetId: asset.id, url: asset.url, role: 'revision', status: 'recommended', score: insp.score }],
+      recommendedId: asset.id,
+      ...(insp.fails.length ? { issues: insp.fails } : {}),
+    };
+    return deliverable;
   },
 });

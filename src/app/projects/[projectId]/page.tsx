@@ -9,6 +9,7 @@ import remarkGfm from 'remark-gfm';
 import VoiceInputButton from '@/components/VoiceInputButton';
 import dynamic from 'next/dynamic';
 import type { LayoutModule } from '@/components/LayoutEditor';
+import type { DeliverableAsset } from '@/lib/types';
 
 // react-konva 用 canvas，禁用 SSR
 const LayoutEditorDyn = dynamic(() => import('@/components/LayoutEditor'), { ssr: false });
@@ -49,18 +50,95 @@ const SUGGESTIONS = [
   '我有参考图，想做类似风格的展台',
 ];
 
-function deliveredImages(parts: readonly unknown[]): { url: string; label: string }[] {
-  const out: { url: string; label: string }[] = [];
+// 一条交付（内部统一形状，兼容新 Deliverable 协议 + 旧返回形状）
+type DeliveryItem = { url: string; view?: string; status: string; recommended: boolean };
+type DeliveryGroup = { type: string; items: DeliveryItem[]; grouped: boolean };
+
+// 英文视角名 → 中文短标
+function viewLabel(view?: string): string {
+  if (!view) return '视角';
+  const v = view.toLowerCase();
+  if (v.includes('left')) return '左视';
+  if (v.includes('right')) return '右视';
+  if (v.includes('back') || v.includes('rear')) return '后视';
+  if (v.includes('top') || v.includes('orthographic') || v.includes('floor plan')) return '俯视';
+  if (v.includes('front') || v.includes('three-quarter') || v.includes('hero')) return '正面';
+  return view.length > 10 ? `${view.slice(0, 10)}…` : view;
+}
+
+// 从 assistant 消息 parts 提取交付组：新协议 Deliverable 优先，回退旧形状（兼容历史对话）。
+function extractDeliveries(parts: readonly unknown[]): DeliveryGroup[] {
+  const groups: DeliveryGroup[] = [];
   for (const p of parts) {
     if (!isToolUIPart(p as never)) continue;
     const o = (p as unknown as ToolPartLike).output as Record<string, unknown> | undefined;
     if (!o) continue;
+    // 新协议：Deliverable { type, assets[], recommendedId }
+    if (Array.isArray(o.assets) && typeof o.recommendedId === 'string') {
+      const items = (o.assets as DeliverableAsset[])
+        .filter((a) => a.url)
+        .map((a) => ({ url: a.url, view: a.view, status: a.status, recommended: a.assetId === o.recommendedId }));
+      if (items.length) groups.push({ type: String(o.type), items, grouped: o.type === 'view-set' || o.type === 'plan-conditioned' });
+      continue;
+    }
+    // 旧形状兼容：{hero, views:[{view,url,status}]}
+    if (o.hero && Array.isArray(o.views)) {
+      const items = (o.views as Array<{ view?: string; url?: string; status?: string }>)
+        .filter((v) => v.url)
+        .map((v, i) => ({ url: v.url as string, view: v.view, status: v.status === 'locked' ? 'ok' : v.status ?? 'ok', recommended: i === 0 }));
+      if (items.length) groups.push({ type: 'view-set', items, grouped: true });
+      continue;
+    }
+    // 旧形状兼容：{recommended:{url}} / {url}
     const rec = o.recommended as { url?: string } | undefined;
-    if (rec?.url) out.push({ url: rec.url, label: '推荐' });
-    else if (typeof o.url === 'string') out.push({ url: o.url, label: '交付' });
+    if (rec?.url) groups.push({ type: 'single', items: [{ url: rec.url, status: 'recommended', recommended: true }], grouped: false });
+    else if (typeof o.url === 'string') groups.push({ type: 'single', items: [{ url: o.url, status: 'ok', recommended: false }], grouped: false });
   }
-  const seen = new Set<string>();
-  return out.filter((i) => (seen.has(i.url) ? false : (seen.add(i.url), true)));
+  return groups;
+}
+
+// 多视角交付：主图 + 各视角分组展示（view-set / plan-conditioned）。弱视角标黄。
+function ViewSet({ group, onZoom }: { group: DeliveryGroup; onZoom: (url: string) => void }) {
+  const hero = group.items.find((i) => i.recommended) ?? group.items[0];
+  const views = group.items.filter((i) => i !== hero);
+  return (
+    <div className="mt-1 w-full rounded-xl border border-ink-700 bg-ink-900/40 p-3">
+      <div className="mono-tag mb-2 flex items-center gap-1.5 text-ink-500">
+        <span className="inline-block h-1.5 w-1.5 rounded-[1px] bg-signal" />
+        {group.type === 'plan-conditioned' ? '按平面图 · 多视角交付' : '多视角交付'}
+      </div>
+      {hero && (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={hero.url}
+          alt="主视角"
+          onClick={() => onZoom(hero.url)}
+          className="mb-2 max-h-80 w-full cursor-zoom-in rounded-lg object-contain ring-1 ring-signal/40 transition hover:brightness-105"
+          title="点击放大"
+        />
+      )}
+      {views.length > 0 && (
+        <div className="flex flex-wrap gap-2">
+          {views.map((v) => (
+            <figure key={v.url} className="m-0 flex flex-col items-center gap-1">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={v.url}
+                alt={viewLabel(v.view)}
+                onClick={() => onZoom(v.url)}
+                className={`h-24 w-28 cursor-zoom-in rounded-md object-cover ring-1 transition hover:brightness-105 ${v.status === 'weak' ? 'ring-amber-500/50' : 'ring-ink-700'}`}
+                title="点击放大"
+              />
+              <figcaption className="mono-tag text-[10px] text-ink-500">
+                {viewLabel(v.view)}
+                {v.status === 'weak' && <span className="text-amber-500"> · 偏弱</span>}
+              </figcaption>
+            </figure>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function timeAgo(iso: string): string {
@@ -241,7 +319,7 @@ function FloorPlan({ layout }: { layout: BoothLayout }) {
 type ChoiceData = {
   intro?: string;
   locked?: string[];
-  questions: { key: string; question: string; recommended?: number; options: { label: string; detail?: string; layout?: BoothLayout; sketch?: string }[] }[];
+  questions: { key: string; question: string; recommended?: number; options: { label: string; detail?: string; layout?: BoothLayout }[] }[];
 };
 
 function ChoiceCards({ data, onSubmit, onRefine, busy }: { data: ChoiceData; onSubmit: (text: string) => void; onRefine: (layout: BoothLayout) => void; busy: boolean }) {
@@ -308,11 +386,6 @@ function ChoiceCards({ data, onSubmit, onRefine, busy }: { data: ChoiceData; onS
                     <div className="overflow-hidden rounded ring-1 ring-ink-800">
                       <FloorPlan layout={o.layout} />
                     </div>
-                  ) : o.sketch ? (
-                    <div
-                      className="overflow-hidden rounded bg-ink-950 ring-1 ring-ink-800 [&_svg]:block [&_svg]:h-auto [&_svg]:w-full"
-                      dangerouslySetInnerHTML={{ __html: o.sketch }}
-                    />
                   ) : null}
                   {o.detail && <span className="text-[11px] leading-relaxed text-ink-400">{o.detail}</span>}
                 </button>
@@ -645,7 +718,7 @@ export default function Workbench() {
             )}
 
             {messages.map((m) => {
-              const imgs = m.role === 'assistant' ? deliveredImages(m.parts) : [];
+              const deliveries = m.role === 'assistant' ? extractDeliveries(m.parts) : [];
               const isUser = m.role === 'user';
               return (
                 <div key={m.id} className={`fade-up flex flex-col gap-2 ${isUser ? 'items-end' : 'items-start'}`}>
@@ -705,32 +778,36 @@ export default function Workbench() {
                       return null;
                     })}
 
-                    {imgs.length > 0 && (
-                      <div className="mt-1 flex w-full flex-wrap gap-3">
-                        {imgs.map((img) => {
-                          const rec = img.label === '推荐';
-                          return (
-                            <figure key={img.url} className="group relative m-0">
-                              {/* eslint-disable-next-line @next/next/no-img-element */}
-                              <img
-                                src={img.url}
-                                alt="交付结果"
-                                onClick={() => setPreview(img.url)}
-                                className={`max-h-96 cursor-zoom-in rounded-xl ring-1 transition group-hover:brightness-105 ${rec ? 'ring-signal/40' : 'ring-ink-700'}`}
-                                title="点击放大"
-                              />
-                              <figcaption
-                                className={`mono-tag absolute left-3 top-3 flex items-center gap-1 rounded-md px-2 py-1 backdrop-blur-sm ${
-                                  rec ? 'bg-signal/15 text-signal' : 'bg-ink-950/60 text-ink-200'
-                                }`}
-                              >
-                                {rec && <span className="inline-block h-1.5 w-1.5 rounded-full bg-signal" />}
-                                {rec ? '推荐交付' : '交付'}
-                              </figcaption>
-                            </figure>
-                          );
-                        })}
-                      </div>
+                    {deliveries.map((g, gi) =>
+                      g.grouped ? (
+                        <ViewSet key={gi} group={g} onZoom={setPreview} />
+                      ) : (
+                        <div key={gi} className="mt-1 flex w-full flex-wrap gap-3">
+                          {g.items.map((img) => {
+                            const rec = img.recommended;
+                            return (
+                              <figure key={img.url} className="group relative m-0">
+                                {/* eslint-disable-next-line @next/next/no-img-element */}
+                                <img
+                                  src={img.url}
+                                  alt="交付结果"
+                                  onClick={() => setPreview(img.url)}
+                                  className={`max-h-96 cursor-zoom-in rounded-xl ring-1 transition group-hover:brightness-105 ${rec ? 'ring-signal/40' : 'ring-ink-700'}`}
+                                  title="点击放大"
+                                />
+                                <figcaption
+                                  className={`mono-tag absolute left-3 top-3 flex items-center gap-1 rounded-md px-2 py-1 backdrop-blur-sm ${
+                                    rec ? 'bg-signal/15 text-signal' : 'bg-ink-950/60 text-ink-200'
+                                  }`}
+                                >
+                                  {rec && <span className="inline-block h-1.5 w-1.5 rounded-full bg-signal" />}
+                                  {rec ? '推荐交付' : '交付'}
+                                </figcaption>
+                              </figure>
+                            );
+                          })}
+                        </div>
+                      ),
                     )}
                   </div>
                 </div>

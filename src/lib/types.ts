@@ -45,3 +45,27 @@ export interface ProjectSummary {
   updatedAt: string;
   thumbnailUrl?: string; // 最新资产缩略
 }
+
+// ── 统一交付协议 Deliverable（D24 契约①）──
+// 所有 render 工具（best_of_n / generate_views / render_from_plan / revise_asset）的**统一出口形状**。
+// 前端 / 对话气泡 / 画廊 / task_complete 都吃这一种 → 以后加新生图工具，前端零改动。
+export type AssetRole = 'hero' | 'view' | 'candidate' | 'revision' | 'plan';
+export type AssetStatus = 'recommended' | 'ok' | 'weak' | 'failed';
+
+export interface DeliverableAsset {
+  assetId: string;
+  url: string;
+  role: AssetRole; // 主图 / 视角 / 候选 / 修订 / 平面图
+  view?: string; // 视角名（role='view' 时），如 'left side' / 'top-down'
+  status: AssetStatus; // recommended=首选 · ok=通过 · weak=一致性偏弱 · failed=未出图
+  score?: number; // 判图分（质量或一致性）
+}
+
+export type DeliverableType = 'single' | 'view-set' | 'plan-conditioned' | 'revision';
+
+export interface Deliverable {
+  type: DeliverableType;
+  assets: DeliverableAsset[]; // 本次产出的所有图
+  recommendedId: string; // 默认展示/交付哪张的 assetId
+  issues?: string[]; // 客观问题（弱视角 / 失败 / 预算截断…）
+}

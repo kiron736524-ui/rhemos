@@ -5,7 +5,7 @@ import { z } from 'zod';
 // 每个选项可带一张 SVG 俯视布局草图，让用户看着结构选。非阻塞：execute 纯透传，前端据此渲染。
 export const presentChoices = tool({
   description:
-    '结构化卡片提问（**所有需要用户拍板的澄清都走这个，不要输出纯文字问题**）：把问题做成可点击卡片让用户选，零打字。每个布局相关选项**应带一张 SVG 俯视草图**（展台轮廓 + 功能区色块 + 尺寸/分区标注），让用户看着结构选。先在 locked 里列已锁定的（让用户安心），再问最多 3 个真正改骨架的硬核问题，每题给 recommended 下标。用户点选后会把选择作为新消息发回，你据此继续。',
+    '结构化卡片提问（**所有需要用户拍板的澄清都走这个，不要输出纯文字问题**）：把问题做成可点击卡片让用户选，零打字。每个布局相关选项**应带结构化 layout 数据**（轮廓 + 功能区位置/尺寸/类型），前端自动渲染成精致俯视平面图，让用户看着结构选。先在 locked 里列已锁定的（让用户安心），再问最多 3 个真正改骨架的硬核问题，每题给 recommended 下标。用户点选后会把选择作为新消息发回，你据此继续。',
   inputSchema: z.object({
     intro: z.string().optional().describe('一句话背景/开场（可选）'),
     locked: z.array(z.string()).optional().describe('已锁定、不再问的要点（让用户安心，体现"信息密度克制"）'),
@@ -48,8 +48,7 @@ export const presentChoices = tool({
                       .describe('所有功能区（含精确位置+尺寸，米制）'),
                   })
                   .optional()
-                  .describe('**优先用这个**：结构化俯视布局数据，前端 FloorPlan 渲染器自动画成精致平面图（真实比例+尺寸标注+网格+配色）。不要手画 SVG。'),
-                sketch: z.string().optional().describe('兜底：仅当无法用 layout 表达时才给完整 <svg>（一般不用）'),
+                  .describe('结构化俯视布局数据，前端 FloorPlan 渲染器自动画成精致平面图（真实比例+尺寸标注+网格+配色）。布局类选项一律用它，绝不输出原始 SVG/HTML。'),
               }),
             )
             .min(2)

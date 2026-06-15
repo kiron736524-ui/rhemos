@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { MAX_PARALLEL_IMAGES, MODEL_IDS, openaiViaGateway, withRenderStyle } from '@/models/gateway';
 import { addInspection, loadAssetBytes, projectIdFromContext, saveAsset } from '@/lib/storage';
 import { inspectImage, toInspectionResult } from '@/agent/inspect';
+import type { Deliverable, DeliverableAsset } from '@/lib/types';
 
 export const generateBestOfN = tool({
   description:
@@ -44,9 +45,20 @@ export const generateBestOfN = tool({
     // 4) 排序：fails 少优先，再 score 高优先
     const ranked = [...candidates].sort((x, y) => x.fails.length - y.fails.length || y.score - x.score);
     const best = ranked[0];
-    return {
-      candidates: ranked,
-      recommended: { assetId: best.assetId, url: best.url, score: best.score, fails: best.fails },
+    // 统一交付协议（D24 契约①）：候选 role='candidate'，最优标 recommended。
+    const deliverableAssets: DeliverableAsset[] = ranked.map((c, i) => ({
+      assetId: c.assetId,
+      url: c.url,
+      role: 'candidate',
+      status: i === 0 ? 'recommended' : c.fails.length === 0 ? 'ok' : 'weak',
+      score: c.score,
+    }));
+    const deliverable: Deliverable = {
+      type: 'single',
+      assets: deliverableAssets,
+      recommendedId: best.assetId,
+      ...(best.fails.length ? { issues: best.fails } : {}),
     };
+    return deliverable;
   },
 });

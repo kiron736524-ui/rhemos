@@ -7,7 +7,8 @@ export const runtime = 'nodejs';
 export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }) {
   const { id } = await ctx.params;
   const project = new URL(req.url).searchParams.get('project') ?? 'default';
-  if (!/^[\w.-]+$/.test(id) || !/^[\w.-]+$/.test(project)) {
+  // 白名单收紧到 [\w-]（不含 '.'）：assetId / project 本就无点，去掉 '.' 可堵 project='..' 之类的路径遍历。
+  if (!/^[\w-]+$/.test(id) || !/^[\w-]+$/.test(project)) {
     return new Response('bad request', { status: 400 });
   }
   const file = path.join(process.cwd(), '.data', 'projects', project, 'assets', `${id}.png`);
