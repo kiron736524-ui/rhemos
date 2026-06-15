@@ -3,7 +3,7 @@
 import { useChat } from '@ai-sdk/react';
 import { getToolName, isToolUIPart, DefaultChatTransport } from 'ai';
 import { useParams, useRouter } from 'next/navigation';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import VoiceInputButton from '@/components/VoiceInputButton';
 
 interface Asset {
@@ -80,7 +80,6 @@ export default function Workbench() {
   const [input, setInput] = useState('');
   const [files, setFiles] = useState<File[]>([]);
   const [preview, setPreview] = useState<string | null>(null);
-  const fileRef = useRef<HTMLInputElement>(null);
 
   const { messages, sendMessage, status, error } = useChat({
     transport: new DefaultChatTransport({ api: '/api/agent', body: { projectId } }),
@@ -307,26 +306,26 @@ export default function Workbench() {
             </div>
           )}
           <div className="flex items-center gap-2">
+            {/* label 关联触发：点 label 由浏览器原生打开文件框，不依赖 .click()，
+                避免 display:none input 在 Safari 等浏览器点击无反应的经典坑。input 用 sr-only（非 display:none）。 */}
             <input
-              ref={fileRef}
+              id="rhemos-upload"
               type="file"
               multiple
               accept="image/*,.pdf,.docx,.xlsx,.xls"
-              className="hidden"
+              className="sr-only"
               onChange={(e) => {
                 if (e.target.files) setFiles((cur) => [...cur, ...Array.from(e.target.files!)]);
                 e.target.value = '';
               }}
             />
-            <button
-              type="button"
-              onClick={() => fileRef.current?.click()}
-              disabled={busy}
+            <label
+              htmlFor="rhemos-upload"
               title="上传图片 / PDF / Word / Excel"
-              className="flex h-9 w-9 items-center justify-center rounded-md border border-neutral-300 text-neutral-600 hover:border-neutral-500 disabled:opacity-40"
+              className={`flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-md border border-neutral-300 text-neutral-600 hover:border-neutral-500 ${busy ? 'pointer-events-none opacity-40' : ''}`}
             >
               <PaperclipIcon />
-            </button>
+            </label>
             <input
               value={input}
               onChange={(e) => setInput(e.target.value)}
