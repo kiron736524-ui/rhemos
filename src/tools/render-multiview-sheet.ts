@@ -19,7 +19,13 @@ export const renderMultiviewSheet = tool({
     '多视角全貌：一次生成**一张** 2x2 turnaround sheet（前/左/右/俯视平面，同一展台），并行 N≤2 张、择最一致那张交付。一致性来自"一次渲染"——**不要拆成多张独立图**。booth 用英文描述（取自 DesignSpec）。默认 high/1536 较慢（best-of-N=2 并行约 ~280-400s，在超时内）。',
   inputSchema: z.object({
     booth: z.string().describe('展台英文描述：结构/材质/颜色/品牌占位/灯光（取自 DesignSpec）'),
-    n: z.number().int().min(1).max(MAX_PARALLEL_IMAGES).default(2).describe('并行候选 sheet 数，择最一致/角度最分明'),
+    n: z
+      .number()
+      .int()
+      .min(1)
+      .max(MAX_PARALLEL_IMAGES)
+      .default(1)
+      .describe('并行候选 sheet 数（默认 1，提速；要择优可设 2，但 high/1536 会到 ~7min）'),
     quality: z.enum(['low', 'medium', 'high']).default('high'),
     size: z.enum(['1024x1024', '1536x1024', '1024x1536']).default('1536x1024').describe('sheet 默认 1536x1024（四格需要像素）'),
   }),
