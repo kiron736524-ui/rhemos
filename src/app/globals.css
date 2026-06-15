@@ -1,26 +1,217 @@
 @import "tailwindcss";
 
+/* ═══════════════════════════════════════════════════════════
+   Rhemos — 暗色 · 工程制图(blueprint)科技
+   品牌三色取自 rhemax：黑(ink ramp) / 朱红 vermillion / 工蓝 draft-blue
+   极简外表，blueprint 细节，作品在暗场里自己发光
+   ═══════════════════════════════════════════════════════════ */
+
+@theme {
+  /* ink ramp — 暗色 UI（数字越大越深，50=最亮文字 / 900=app 底 / 950=最深）*/
+  --color-ink-50: #eceef2;
+  --color-ink-100: #d5d9e0;
+  --color-ink-200: #b3b9c4;
+  --color-ink-300: #888f9c;
+  --color-ink-400: #5e646f;
+  --color-ink-500: #444a54;
+  --color-ink-600: #313640;
+  --color-ink-700: #262a32;
+  --color-ink-750: #1f222a;
+  --color-ink-800: #181a20;
+  --color-ink-850: #131419;
+  --color-ink-900: #0e0f13;
+  --color-ink-950: #08090b;
+
+  /* 工蓝（主强调）— rhemax draft-blue #5D85A8 提亮，暗底清晰 */
+  --color-accent: #6fa1c9;
+  --color-accent-deep: #5d85a8;
+  --color-accent-soft: #16222c;
+
+  /* 朱红（关键信号：推荐 / 录音 / 在制 / 危险）— rhemax vermillion #BF4136 提亮 */
+  --color-signal: #d2554a;
+  --color-signal-deep: #bf4136;
+  --color-signal-soft: #281613;
+
+  /* 状态 */
+  --color-ok: #5ba873;
+  --color-warn: #c9943f;
+
+  /* blueprint 网格线（极淡蓝）*/
+  --color-grid: rgba(111, 161, 201, 0.05);
+
+  --font-sans: var(--font-manrope), "PingFang SC", "Noto Sans SC", system-ui, -apple-system, sans-serif;
+  --font-mono: var(--font-plex), "SF Mono", ui-monospace, monospace;
+
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 18px;
+}
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-spring: cubic-bezier(0.5, 1.4, 0.7, 1);
+  --dur-fast: 110ms;
+  --dur-base: 220ms;
+  --dur-slow: 400ms;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+html {
+  color-scheme: dark;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--color-ink-900);
+  color: var(--color-ink-100);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+/* ── 选区 / 滚动条 / focus ─────────────────────────────── */
+::selection {
+  background: color-mix(in srgb, var(--color-accent) 30%, transparent);
+  color: var(--color-ink-50);
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-ink-700);
+  border-radius: 9999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-ink-600);
+}
+
+:where(button, a, input, textarea, [role="button"], label):focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+  border-radius: inherit;
+}
+
+/* ── blueprint 底纹（极简外表下的"制图"层）──────────── */
+.bp-grid {
+  background-image:
+    linear-gradient(var(--color-grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--color-grid) 1px, transparent 1px);
+  background-size: 30px 30px;
+}
+.bp-grid-fine {
+  background-image:
+    linear-gradient(var(--color-grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--color-grid) 1px, transparent 1px);
+  background-size: 15px 15px;
+}
+
+/* 等宽小标注（mono caps）— 制图标签气质 */
+.mono-tag {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+/* ── 微交互 ─────────────────────────────────────────── */
+.u-press {
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+.u-press:active {
+  transform: scale(0.96);
+}
+.u-tap {
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out);
+}
+
+/* ── 动画 ───────────────────────────────────────────── */
+@keyframes bp-scan {
+  0% {
+    transform: translateY(-120%);
+  }
+  100% {
+    transform: translateY(820%);
+  }
+}
+/* 扫描线：生图进行时贴在容器上的"在制图"动效（容器需 position:relative; overflow:hidden）*/
+.bp-scan::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 12%;
+  pointer-events: none;
+  background: linear-gradient(
+    180deg,
+    transparent,
+    color-mix(in srgb, var(--color-accent) 24%, transparent),
+    transparent
+  );
+  animation: bp-scan 2.6s var(--ease-out) infinite;
+}
+
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.fade-up {
+  animation: fade-up var(--dur-base) var(--ease-out) both;
+}
+
+@keyframes pulse-dot {
+  0%,
+  100% {
+    opacity: 0.4;
+    transform: scale(0.82);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.12);
+  }
+}
+.pulse-dot {
+  animation: pulse-dot 1.4s var(--ease-out) infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.spin {
+  animation: spin 1s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

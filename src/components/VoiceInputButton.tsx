@@ -76,7 +76,7 @@ function encodeWav(pcm: Int16Array, sampleRate: number): Blob {
 }
 
 const MicIcon = () => (
-  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+  <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
     <rect x="9" y="2" width="6" height="12" rx="3" /><path d="M5 10a7 7 0 0 0 14 0M12 17v4" />
   </svg>
 );
@@ -228,10 +228,15 @@ export default function VoiceInputButton({
   return (
     <span className="flex items-center gap-2">
       {state !== 'idle' && (
-        <span className="text-xs text-neutral-500" role="status" aria-live="polite">
-          {state === 'recording' && `请说 ${timeLabel}`}
-          {state === 'uploading' && '正在识别…'}
-          {state === 'error' && <span className="text-red-500">{errorMsg || '出错了'}</span>}
+        <span className="mono-tag flex items-center gap-1.5 text-ink-400" role="status" aria-live="polite">
+          {state === 'recording' && (
+            <>
+              <span className="h-1.5 w-1.5 rounded-full bg-signal pulse-dot" />
+              {timeLabel}
+            </>
+          )}
+          {state === 'uploading' && '识别中…'}
+          {state === 'error' && <span className="text-signal">{errorMsg || '出错了'}</span>}
         </span>
       )}
       <button
@@ -240,15 +245,15 @@ export default function VoiceInputButton({
         disabled={isDisabled}
         aria-label={state === 'recording' ? '停止录音' : '语音输入'}
         title={state === 'recording' ? '点击停止' : '点击语音输入'}
-        className={`flex h-9 w-9 items-center justify-center rounded-md border text-sm transition-colors disabled:opacity-40 ${
+        className={`u-tap flex h-9 w-9 shrink-0 items-center justify-center rounded-lg transition-colors disabled:opacity-40 ${
           state === 'recording'
-            ? 'border-red-300 bg-red-50 text-red-600'
-            : 'border-neutral-300 text-neutral-600 hover:border-neutral-500'
+            ? 'bg-signal-soft text-signal'
+            : 'text-ink-400 hover:bg-ink-700 hover:text-ink-100'
         }`}
       >
         {state === 'idle' && <MicIcon />}
-        {state === 'recording' && <span className="h-3 w-3 rounded-[2px] bg-red-500" />}
-        {state === 'uploading' && <span className="h-4 w-4 animate-spin rounded-full border-2 border-neutral-300 border-t-neutral-600" />}
+        {state === 'recording' && <span className="h-3 w-3 rounded-[2px] bg-signal" />}
+        {state === 'uploading' && <span className="h-4 w-4 animate-spin rounded-full border-2 border-ink-600 border-t-accent" />}
         {state === 'error' && <MicIcon />}
       </button>
     </span>
