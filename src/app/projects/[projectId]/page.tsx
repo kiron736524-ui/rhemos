@@ -250,7 +250,7 @@ export default function Workbench() {
                     if (fp.mediaType?.startsWith('image/') && fp.url) {
                       return (
                         // eslint-disable-next-line @next/next/no-img-element
-                        <img key={i} src={fp.url} alt="附件" onDoubleClick={() => setPreview(fp.url!)} className="mt-1 max-h-40 cursor-zoom-in rounded border border-neutral-200" />
+                        <img key={i} src={fp.url} alt="附件" onClick={() => setPreview(fp.url!)} className="mt-1 max-h-40 cursor-zoom-in rounded border border-neutral-200" />
                       );
                     }
                     return (
@@ -278,7 +278,7 @@ export default function Workbench() {
                     {imgs.map((img) => (
                       <figure key={img.url} className="m-0">
                         {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img src={img.url} alt="交付结果" onDoubleClick={() => setPreview(img.url)} className="max-h-80 cursor-zoom-in rounded-md border border-neutral-200" title="双击放大" />
+                        <img src={img.url} alt="交付结果" onClick={() => setPreview(img.url)} className="max-h-80 cursor-zoom-in rounded-md border border-neutral-200" title="点击放大" />
                         <figcaption className="mt-0.5 text-[11px] font-medium text-emerald-600">{img.label}</figcaption>
                       </figure>
                     ))}
@@ -391,7 +391,7 @@ export default function Workbench() {
           {assets.map((a, idx) => (
             <figure key={a.id} className="m-0 overflow-hidden rounded-md border border-neutral-200 bg-white">
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={a.url} alt={a.kind} onDoubleClick={() => setPreview(a.url)} className="w-full cursor-zoom-in" title="双击放大" />
+              <img src={a.url} alt={a.kind} onClick={() => setPreview(a.url)} className="w-full cursor-zoom-in" title="点击放大" />
               <figcaption className="flex items-center justify-between px-2 py-1 text-[10px] text-neutral-500">
                 <span>
                   {idx === 0 && <span className="mr-1 rounded bg-emerald-100 px-1 text-emerald-700">最新</span>}
