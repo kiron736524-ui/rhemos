@@ -5,16 +5,19 @@
 > 单一大脑（Opus 4.8）+ 多工具；**控制流是大脑的推理，不是状态机**。自检对用户隐形。
 
 ## 现状
-- ✅ **Phase 0** 接线 ｜ ✅ **Phase 1** 最小 Loop Agent（澄清 + 智能提问）｜ ✅ **Phase 2** best-of-N 自省闭环
-- ✅ **Phase 3** 多视图（单图 turnaround sheet）｜ ✅ **Phase 4** 产品骨架（projectId 隔离 · 三栏工作台 · 多模态上传 · ASR 语音）
-- ⬜ **Phase 5** 生产化（DB / auth / 成本核算 / 部署，部署时做）
+- ✅ **Phase 0-4** Loop Agent 全链路（澄清 → 方案 → 生图 → 判图择优 → 修 → 交付）· projectId 隔离 · 多模态上传 · ASR 语音
+- ✅ **UI 颠覆**：暗色 · 工程制图科技（rhemax 黑红蓝 `#1A1815/#BF4136/#5D85A8`），作品在暗场发光；assistant 走 markdown 渲染
+- ✅ **卡片式提问**：所有澄清走可点选卡片（零打字）+ 俯视布局草图；可拖入 **react-konva 布局编辑器**（拖拽 / 缩放 / L 形）精调
+- ✅ **工业级一致性**：identity 身份锁定 + 画风锚 + **进化式参考链**（judge 门控）+ **平面图条件化生图**（编辑器截图 → 喂模型出贴合布局的 3D）
+- ✅ 对话持久化（流式存盘，切项目 / 刷新不丢）
+- ⬜ **Phase 5** 生产化（DB / auth / 成本核算 / 部署）
 
-**工作台**（`/projects/:projectId`）三栏：左项目面板（列表 / 切换载入 / 新建 / 删除）｜ 中对话（文字 + 语音输入 + 上传图片/PDF/Word/Excel，附件缩略图悬浮预览）｜ 右资产画廊。交付图进对话气泡并标"✓ 推荐"，图片单击放大；工具过程默认隐藏（调试开关可见）。
+**工作台**（`/projects/:projectId`）三栏暗色科技界面：左项目面板（列表 / 切换 / 新建 / 删除）｜ 中对话（文字 / 语音 / 上传 + **卡片选择** + markdown；交付图标"推荐"、单击放大）｜ 右资产画廊。需要拍板时大脑出**卡片 + 俯视草图**让你点选；布局可进编辑器拖拽精调 → 截图喂生图。工具过程默认隐藏（调试开关可见）。
 
 ## 技术栈
-Next.js 16 + React 19 + TypeScript + **AI SDK 6** + **Vercel AI Gateway**（模型唯一来源）。
-脑 `anthropic/claude-opus-4.8` · 生图 `openai/gpt-image-2` · 判图 `anthropic/claude-sonnet-4.6` · 语音清理 `deepseek/deepseek-v4-flash`（均经 Gateway）· ASR `fun-asr-realtime`（DashScope，唯一非 Gateway 例外，已接线）。
-docx/xlsx 上传由服务端提取文字（mammoth / SheetJS）后喂给大脑；图片/PDF 由 Opus 4.8 原生识别。
+Next.js 16 + React 19 + TypeScript + **AI SDK 6** + **Vercel AI Gateway**（模型唯一来源）。UI：Tailwind 4 暗色 token + react-markdown（assistant 渲染）+ **react-konva**（2D 布局编辑器，`toDataURL` 截图喂生图）。
+脑 `anthropic/claude-opus-4.8` · 文生图 `openai/gpt-image-2` · **参考条件化 / 编辑 `google/gemini-3-pro-image`**（换角度 / 平面图条件化，一致性强）· 判图 `anthropic/claude-sonnet-4.6` · 语音清理 `deepseek/deepseek-v4-flash`（均经 Gateway）· ASR `fun-asr-realtime`（DashScope，唯一非 Gateway 例外）。
+docx/xlsx 上传服务端提取（mammoth / SheetJS）；图片/PDF Opus 4.8 原生识别。
 
 ## 快速开始
 ```bash
@@ -33,6 +36,9 @@ scripts/multiview-spike.mjs    # 多视图 sheet 一致性
 scripts/asr-spike.mjs          # Fun-ASR 语音转写
 scripts/attach-spike.mjs       # 上传 xlsx 端到端（需 dev server 在 3000）
 scripts/image-attach-spike.mjs # 上传图片端到端（需 dev server）
+scripts/consistency-spike.mjs  # 参考图换角度一致性（Gemini）
+scripts/evolution-spike.mjs    # identity + 累积参考链增量
+scripts/pipeline-spike.mjs     # 进化式多视角端到端
 ```
 
 ## 文档地图
