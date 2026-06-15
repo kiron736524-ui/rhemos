@@ -41,5 +41,9 @@
 ## 多模态上传（Phase 4 补充）
 - **D21 · 上传走服务端提取，不靠模型直读 Office**：图片/PDF 由 Opus 4.8 原生识别（原样传）；docx 用 mammoth 提正文+内嵌图、xlsx 用 SheetJS 转 CSV，再以 text/file part 注入消息。落点 `src/lib/attachments.ts`，route 在 `convertToModelMessages` 前预处理。**实测坑**：file input 别 `display:none`（Safari 点击不弹框→用 `<label htmlFor>`+`sr-only`）；onChange 别在 `setFiles` 闭包里读 `e.target.files`（会被同步行 `value=''` 清空→先同步读出再清空）。
 
+## 生图一致性（2026-06-15 重构）
+- **D22 · 多视角一致性 = identity 锁定 + 参考条件化 + 进化式参考链 + 判图门控**（部分推翻 D17 "走 sheet" 的结论）。**纠正 D17**：`images.edit` 经 Gateway 确实 404，但图像编辑/参考图**可走 `generateText` + input image part 经 Gemini 3 Pro Image**——D17 当年只测了 `images.edit` 一条就判"不可用"，片面。实测依据：① 单参考换角度方差大（62~88，故 best-of-N 择优是刚需）② 累积优质参考提升一致性（俯视用[主图+已过关左视]双参考 → 92 > 单参考 72）③ 把漂移图当参考会传染漂移（故**门控**：仅判图通过的视角才进参考池，`CONSISTENCY_GATE=70`）。落点：`models/gateway.ts` 的 `generateImageFromRefs` + `MODEL_IDS.imageEdit=google/gemini-3-pro-image`、`tools/generate-views.ts`（`generate_views` 多视角交付主力）、`agent/inspect.ts` 的 `inspectConsistency`、`revise_asset` 改为参考图局部编辑、`DesignSpec.identity`（基础信息 schema）。**sheet 降级为"快速对齐探索"，不做最终交付**（单格低清易漂）；多视角交付走 `generate_views` 的单视角全幅。spike：`scripts/{consistency,evolution,pipeline}-spike.mjs`。
+- **D23 · 画风锚代码层强制注入**：`RENDER_STYLE_ANCHOR` + `withRenderStyle` 对所有生图前置"V-Ray/Corona 级工业渲染 + 否定卡通/插画/示意图"。因 gpt-image-2 缺强画风约束会漂向 CG/示意图（尤其 turnaround sheet 措辞带向 model-sheet 线稿）。
+
 ## 进度
 Phase 0（接线 + 连通 spike）· Phase 1（最小 Loop Agent）· Phase 2（best-of-N 自省闭环）· Phase 3（多视图 turnaround sheet）· Phase 4（projectId 隔离 / 三栏工作台 / 多模态上传 / ASR / inspection 沉淀 / per-project 写锁）已完成并实测。**Phase 4 余项**（用户选图=强信号、薄代码级不变量）+ **Phase 5**（DB / auth / 成本核算 / 部署 / 长任务队列）未做 —— 见 `engineering-plan.md`。
