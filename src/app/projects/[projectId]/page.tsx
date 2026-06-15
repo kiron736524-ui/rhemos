@@ -59,7 +59,7 @@ export default function Workbench() {
   const [preview, setPreview] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
-  const { messages, sendMessage, status } = useChat({
+  const { messages, sendMessage, status, error } = useChat({
     transport: new DefaultChatTransport({ api: '/api/agent', body: { projectId } }),
   });
   const busy = status === 'submitted' || status === 'streaming';
@@ -177,6 +177,9 @@ export default function Workbench() {
               );
             })}
             {busy && <p className="text-xs text-neutral-400">{progress}（生图较慢，请稍候）</p>}
+            {error && !busy && (
+              <p className="rounded bg-red-50 px-3 py-2 text-xs text-red-600">出错了，请重试一次。若反复失败，点右上角「+ 新项目」重开对话。</p>
+            )}
           </div>
 
           <form
