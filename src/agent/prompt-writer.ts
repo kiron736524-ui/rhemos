@@ -46,7 +46,7 @@ export async function writeImagePrompt(args: { intent: string; identity?: string
   ]
     .filter(Boolean)
     .join('\n\n');
-  // 复用 Sonnet 档（写 prompt 是文本任务，快且够用）；与判图同模型、天然分档。
+  // 复用 MODEL_IDS.inspect 档（现为 Opus 4.8，用户指定质量优先）；与判图同模型。
   const r = await generateText({ model: gateway.languageModel(MODEL_IDS.inspect), system: await writerSystem(), prompt: ask });
   return r.text.trim();
 }

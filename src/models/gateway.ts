@@ -1,6 +1,6 @@
 import { gateway } from '@ai-sdk/gateway';
 import { generateText } from 'ai';
-import OpenAI from 'openai';
+import OpenAI, { toFile } from 'openai';
 
 /**
  * 所有模型调用经 Vercel AI Gateway（唯一来源，ASR 除外）。
@@ -11,8 +11,8 @@ export const MODEL_IDS = {
   brain: 'anthropic/claude-opus-4.8',
   /** 生图 + 改图 */
   image: 'openai/gpt-image-2',
-  /** 高频视觉自检默认档（Phase 0 判图基准测试后最终确定，见 INSPECT_CANDIDATES） */
-  inspect: 'anthropic/claude-sonnet-4.6',
+  /** 判图自检 + 工具内 prompt-writer 共用档。用户指定升 Opus 4.8（质量优先，与大脑同款；成本更高）。 */
+  inspect: 'anthropic/claude-opus-4.8',
   /** 参考图条件化生图 / 局部编辑（多模态图像模型，一致性标杆）——换角度、"保持其余不变只改X" */
   imageEdit: 'google/gemini-3-pro-image',
   /** 语音转写后的清理整理（去语气词/去重复/轻度理顺）—— efficiency 档，便宜快 */
@@ -64,12 +64,27 @@ export const RENDER_STYLE_ANCHOR =
 /** 把画风锚追加到任意生图 prompt 末尾（代码层强制兜底）。 */
 export const withRenderStyle = (prompt: string): string => `${prompt}\n\n${RENDER_STYLE_ANCHOR}`;
 
+/** OpenAI 直连（仅当配置 OPENAI_API_KEY）：gpt-image-2 的图编辑端点 images.edit 经 Gateway 实测 404，
+ *  要用 gpt-image-2 做参考条件化只能直连 —— 第二个非 Gateway 例外（类比 ASR 直连 DashScope）。 */
+const openaiDirect = () => (process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null);
+
 /**
- * 参考图条件化生图（Gemini 3 Pro Image）：把一张或多张参考图 + 文字指令一起喂给多模态图像模型，
- * 让它"看着这个展台"换角度 / 局部编辑，保持与参考一致。多图参考 = 更强的身份锁定（进化链）。
- * 失败（无图返回 / 报错由调用方 catch）时返回 null。
+ * 参考图条件化生图：把一张或多张参考图 + 文字指令喂给多模态图像模型，"看着这个展台"换角度 / 局部编辑，保持一致。
+ * 优先 **gpt-image-2 直连 images.edit**（用户指定，多图参考 + quality high；需 OPENAI_API_KEY）；
+ * 无 key 或直连失败则回退 **Gemini 3 Pro Image 经 Gateway**。多图参考 = 更强身份锁定（进化链）。失败返回 null。
  */
 export async function generateImageFromRefs(refs: Uint8Array[], instruction: string): Promise<Uint8Array | null> {
+  const direct = openaiDirect();
+  if (direct) {
+    try {
+      const files = await Promise.all(refs.map((b, i) => toFile(Buffer.from(b), `ref${i}.png`, { type: 'image/png' })));
+      const r = await direct.images.edit({ model: 'gpt-image-2', image: files, prompt: instruction, quality: 'high' });
+      const b64 = r.data?.[0]?.b64_json;
+      if (b64) return new Uint8Array(Buffer.from(b64, 'base64'));
+    } catch {
+      /* 直连失败 → 回退 Gemini */
+    }
+  }
   const r = await generateText({
     model: gateway.languageModel(MODEL_IDS.imageEdit),
     messages: [{ role: 'user', content: [{ type: 'text', text: instruction }, ...refs.map((image) => ({ type: 'image' as const, image }))] }],

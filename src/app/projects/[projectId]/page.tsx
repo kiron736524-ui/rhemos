@@ -322,7 +322,32 @@ type ChoiceData = {
   questions: { key: string; question: string; recommended?: number; options: { label: string; detail?: string; layout?: BoothLayout }[] }[];
 };
 
-function ChoiceCards({ data, onSubmit, onRefine, busy }: { data: ChoiceData; onSubmit: (text: string) => void; onRefine: (layout: BoothLayout) => void; busy: boolean }) {
+// 方案定稿后大脑推来布局 → mount 自动弹编辑器（用此 layout 初始化）+ 卡片可重开 / 跳过。
+function LayoutGate({ data, onOpen, onSkip, busy }: { data: { layout: BoothLayout; intro?: string }; onOpen: (l: BoothLayout) => void; onSkip: () => void; busy: boolean }) {
+  const opened = useRef(false);
+  useEffect(() => {
+    if (!opened.current && data.layout) {
+      opened.current = true;
+      onOpen(data.layout); // 方案就绪信号到达即自动弹编辑器（onOpen=openEditor 是 prop，不触发 set-state 规则）
+    }
+  }, [data, onOpen]);
+  return (
+    <div className="w-full rounded-xl border border-accent/40 bg-accent-soft/25 p-3.5">
+      <div className="mono-tag mb-1 text-accent">方案已就绪 · 布局精调</div>
+      <p className="text-[13px] leading-relaxed text-ink-200">{data.intro || '编辑器已弹出——拖拽调整布局，确认后按它出 3D 图；不想调也可直接出。'}</p>
+      <div className="mt-2.5 flex flex-wrap gap-2">
+        <button type="button" disabled={busy} onClick={() => onOpen(data.layout)} className="u-press rounded-lg border border-accent/50 bg-accent-soft px-3.5 py-1.5 text-[12.5px] text-accent disabled:opacity-40">
+          ✎ 打开编辑器
+        </button>
+        <button type="button" disabled={busy} onClick={onSkip} className="u-press rounded-lg border border-ink-600 px-3.5 py-1.5 text-[12.5px] text-ink-300 hover:text-ink-100 disabled:opacity-40">
+          ⤴ 按原方案直接出图
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ChoiceCards({ data, onSubmit, busy }: { data: ChoiceData; onSubmit: (text: string) => void; busy: boolean }) {
   const [picks, setPicks] = useState<Record<string, number>>({});
   const [submitted, setSubmitted] = useState(false);
   const questions = data.questions ?? [];
@@ -342,7 +367,6 @@ function ChoiceCards({ data, onSubmit, onRefine, busy }: { data: ChoiceData; onS
   };
   const hasRec = questions.some((q) => typeof q.recommended === 'number');
   const allPicked = questions.length > 0 && questions.every((q) => picks[q.key] != null);
-  const refinable = questions.map((q) => q.options[picks[q.key]]).find((o) => o && o.layout)?.layout;
 
   if (submitted) {
     return (
@@ -395,16 +419,6 @@ function ChoiceCards({ data, onSubmit, onRefine, busy }: { data: ChoiceData; onS
         </div>
       ))}
       <div className="flex flex-wrap gap-2 pt-1">
-        {refinable && (
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => onRefine(refinable)}
-            className="u-press rounded-lg border border-accent/50 bg-accent-soft px-3.5 py-2 text-[13px] text-accent hover:opacity-80 disabled:opacity-40"
-          >
-            ✎ 精调布局并出图
-          </button>
-        )}
         {hasRec && (
           <button
             type="button"
@@ -565,6 +579,11 @@ export default function Workbench() {
     } catch {
       /* ignore */
     }
+  };
+  // 跳过精调：关编辑器 + 让大脑按原方案布局直接出图
+  const handleEditorSkip = () => {
+    setEditor(null);
+    send('不精调了，按原方案的布局直接出图。请调用 render 给中文意图出 3D 效果图全套。');
   };
 
   const deleteProj = async (id: string) => {
@@ -759,7 +778,15 @@ export default function Workbench() {
                       if (isToolUIPart(part) && getToolName(part) === 'present_choices') {
                         const tp = part as unknown as ToolPartLike;
                         if (tp.state === 'output-available' && tp.output) {
-                          return <ChoiceCards key={i} data={tp.output as ChoiceData} onSubmit={(t) => send(t)} onRefine={openEditor} busy={busy} />;
+                          return <ChoiceCards key={i} data={tp.output as ChoiceData} onSubmit={(t) => send(t)} busy={busy} />;
+                        }
+                        return null;
+                      }
+                      // present_layout：方案后推布局 → 自动弹编辑器 + 精调/跳过卡片
+                      if (isToolUIPart(part) && getToolName(part) === 'present_layout') {
+                        const tp = part as unknown as ToolPartLike;
+                        if (tp.state === 'output-available' && tp.output) {
+                          return <LayoutGate key={i} data={tp.output as { layout: BoothLayout; intro?: string }} onOpen={openEditor} onSkip={handleEditorSkip} busy={busy} />;
                         }
                         return null;
                       }
@@ -980,7 +1007,12 @@ export default function Workbench() {
       {editor && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink-950/92 p-6 backdrop-blur-sm">
           <div className="max-h-full overflow-auto rounded-xl border border-ink-800 bg-ink-900 p-5">
-            <div className="mb-3 text-[14px] font-medium text-ink-50">布局编辑器 · 拖拽 / 缩放 / 改形状，确认后按它出 3D 图</div>
+            <div className="mb-3 flex items-center justify-between gap-4">
+              <span className="text-[14px] font-medium text-ink-50">布局编辑器 · 拖拽 / 缩放 / 改形状，确认后按它出 3D 图</span>
+              <button type="button" onClick={handleEditorSkip} className="u-press shrink-0 rounded-lg border border-ink-600 px-3 py-1.5 text-[12px] text-ink-300 hover:text-ink-100">
+                ⤴ 按原方案直接出
+              </button>
+            </div>
             <LayoutEditorDyn footprint={editor.footprint} initial={editor.modules} openings={editor.openings} onConfirm={handleEditorConfirm} onCancel={() => setEditor(null)} />
           </div>
         </div>

@@ -9,6 +9,7 @@ import { taskComplete } from '@/tools/task-complete';
 import { updateSpec } from '@/tools/update-spec';
 import { updateBrief } from '@/tools/update-brief';
 import { presentChoices } from '@/tools/present-choices';
+import { presentLayout } from '@/tools/present-layout';
 import { render } from '@/tools/render';
 
 // 工具注册表（名字即大脑看到的工具名）
@@ -18,6 +19,7 @@ export const tools = {
   analyze_reference: analyzeReference,
   update_brief: updateBrief,
   update_spec: updateSpec,
+  present_layout: presentLayout,
   render: render,
   revise_asset: reviseAsset,
   task_complete: taskComplete,
