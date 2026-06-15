@@ -3,8 +3,15 @@
 import { useChat } from '@ai-sdk/react';
 import { getToolName, isToolUIPart, DefaultChatTransport } from 'ai';
 import { useParams, useRouter } from 'next/navigation';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import ReactMarkdown, { type Components } from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import VoiceInputButton from '@/components/VoiceInputButton';
+import dynamic from 'next/dynamic';
+import type { LayoutModule } from '@/components/LayoutEditor';
+
+// react-konva 用 canvas，禁用 SSR
+const LayoutEditorDyn = dynamic(() => import('@/components/LayoutEditor'), { ssr: false });
 
 interface Asset {
   id: string;
@@ -27,14 +34,20 @@ interface ProjectSummary {
 type ToolPartLike = { state?: string; input?: unknown; output?: unknown };
 
 const PROGRESS: Record<string, string> = {
-  read_project_state: '正在读取项目…',
-  update_spec: '正在整理方案…',
-  generate_best_of_n: '正在生成候选并筛选…',
-  render_multiview_sheet: '正在生成多视角全貌…',
-  revise_asset: '正在修正结构问题…',
-  analyze_reference: '正在分析参考图…',
-  inspect_result: '正在核对结果…',
+  read_project_state: '读取项目状态',
+  update_spec: '整理设计方案',
+  generate_best_of_n: '并行生成候选并择优',
+  render_multiview_sheet: '渲染多视角全貌',
+  revise_asset: '定向修正结构',
+  analyze_reference: '分析参考图',
+  inspect_result: '客观核对结果',
 };
+
+const SUGGESTIONS = [
+  '10×6 科技公司展台，主打中央 LED 大屏与产品体验区',
+  '极简白色美妆展台，3×3 开放式，强调产品陈列与打光',
+  '我有参考图，想做类似风格的展台',
+];
 
 function deliveredImages(parts: readonly unknown[]): { url: string; label: string }[] {
   const out: { url: string; label: string }[] = [];
@@ -43,7 +56,7 @@ function deliveredImages(parts: readonly unknown[]): { url: string; label: strin
     const o = (p as unknown as ToolPartLike).output as Record<string, unknown> | undefined;
     if (!o) continue;
     const rec = o.recommended as { url?: string } | undefined;
-    if (rec?.url) out.push({ url: rec.url, label: '✓ 推荐' });
+    if (rec?.url) out.push({ url: rec.url, label: '推荐' });
     else if (typeof o.url === 'string') out.push({ url: o.url, label: '交付' });
   }
   const seen = new Set<string>();
@@ -65,11 +78,282 @@ function newProjectId(): string {
   return `p-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
 }
 
-const PaperclipIcon = () => (
-  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+const assetKindLabel = (kind: string) => (kind === 'multiview' ? '多视角全貌' : '效果图');
+
+/* ── 线性图标（科技感，stroke currentColor）─────────────── */
+type IP = { className?: string };
+const PaperclipIcon = ({ className }: IP) => (
+  <svg className={className} width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
     <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
   </svg>
 );
+const PlusIcon = ({ className }: IP) => (
+  <svg className={className} width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+    <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
+  </svg>
+);
+const SendIcon = ({ className }: IP) => (
+  <svg className={className} width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+    <line x1="12" y1="19" x2="12" y2="5" /><polyline points="6 11 12 5 18 11" />
+  </svg>
+);
+const CloseIcon = ({ className }: IP) => (
+  <svg className={className} width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+    <line x1="6" y1="6" x2="18" y2="18" /><line x1="18" y1="6" x2="6" y2="18" />
+  </svg>
+);
+const DownloadIcon = ({ className }: IP) => (
+  <svg className={className} width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" />
+  </svg>
+);
+const TrashIcon = ({ className }: IP) => (
+  <svg className={className} width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+    <polyline points="3 6 5 6 21 6" /><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+  </svg>
+);
+
+/* ── markdown 渲染（assistant 回复用，暗色科技样式）──────── */
+const mdComponents: Components = {
+  p: ({ children }) => <p className="text-[14px] leading-[1.75] text-ink-100">{children}</p>,
+  strong: ({ children }) => <strong className="font-semibold text-ink-50">{children}</strong>,
+  em: ({ children }) => <em className="italic text-ink-100">{children}</em>,
+  ul: ({ children }) => <ul className="list-disc space-y-1 pl-5 marker:text-ink-500">{children}</ul>,
+  ol: ({ children }) => <ol className="list-decimal space-y-1 pl-5 marker:text-ink-500">{children}</ol>,
+  li: ({ children }) => <li className="text-[14px] leading-[1.7] text-ink-100">{children}</li>,
+  h1: ({ children }) => <h3 className="text-[16px] font-semibold text-ink-50">{children}</h3>,
+  h2: ({ children }) => <h3 className="text-[15px] font-semibold text-ink-50">{children}</h3>,
+  h3: ({ children }) => <h4 className="text-[14.5px] font-semibold text-ink-50">{children}</h4>,
+  a: ({ children, href }) => (
+    <a href={href} target="_blank" rel="noreferrer" className="text-accent underline underline-offset-2 hover:text-accent-deep">
+      {children}
+    </a>
+  ),
+  code: ({ children }) => <code className="rounded bg-ink-800 px-1.5 py-0.5 font-mono text-[12.5px] text-accent">{children}</code>,
+  pre: ({ children }) => (
+    <pre className="overflow-x-auto rounded-lg border border-ink-700 bg-ink-850 p-3 text-[12.5px] [&_code]:bg-transparent [&_code]:p-0 [&_code]:text-ink-100">
+      {children}
+    </pre>
+  ),
+  hr: () => <hr className="border-ink-700" />,
+  blockquote: ({ children }) => <blockquote className="border-l-2 border-ink-600 pl-3 text-ink-300">{children}</blockquote>,
+  table: ({ children }) => (
+    <div className="overflow-x-auto">
+      <table className="w-full border-collapse text-[13px]">{children}</table>
+    </div>
+  ),
+  th: ({ children }) => <th className="border border-ink-700 bg-ink-850 px-2 py-1 text-left font-medium text-ink-200">{children}</th>,
+  td: ({ children }) => <td className="border border-ink-700 px-2 py-1 text-ink-100">{children}</td>,
+};
+
+function Prose({ children }: { children: string }) {
+  return (
+    <div className="space-y-3">
+      <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
+        {children}
+      </ReactMarkdown>
+    </div>
+  );
+}
+
+/* ── 数据驱动的展台俯视平面图渲染器（大脑只出结构化数据，精致渲染交给代码）── */
+type Zone = { name: string; type?: string; x: number; y: number; w: number; h: number; note?: string };
+type BoothLayout = { length: number; width: number; openings?: string[]; facing?: string; zones: Zone[] };
+
+const ZONE_STYLE: Record<string, { fill: string; stroke: string }> = {
+  led: { fill: 'rgba(111,161,201,0.34)', stroke: '#6FA1C9' },
+  stage: { fill: 'rgba(111,161,201,0.2)', stroke: '#6FA1C9' },
+  brand: { fill: 'rgba(210,85,74,0.3)', stroke: '#D2554A' },
+  reception: { fill: 'rgba(180,185,196,0.18)', stroke: '#B3B9C4' },
+  meeting: { fill: 'rgba(94,100,111,0.5)', stroke: '#9AA1AD' },
+  storage: { fill: 'rgba(60,66,76,0.6)', stroke: '#5E646F' },
+  product: { fill: 'rgba(136,143,156,0.2)', stroke: '#B3B9C4' },
+  plant: { fill: 'rgba(91,168,115,0.3)', stroke: '#5BA873' },
+  aisle: { fill: 'rgba(255,255,255,0.02)', stroke: 'rgba(136,143,156,0.3)' },
+  default: { fill: 'rgba(94,100,111,0.22)', stroke: '#888F9C' },
+};
+
+function FloorPlan({ layout }: { layout: BoothLayout }) {
+  const L = Number(layout?.length),
+    W = Number(layout?.width);
+  if (!(L > 0) || !(W > 0) || !Array.isArray(layout.zones)) return null;
+  const PAD = 26,
+    MAXW = 252,
+    MAXH = 188;
+  const s = Math.min(MAXW / L, MAXH / W);
+  const iw = L * s,
+    ih = W * s;
+  const svgW = iw + PAD * 2,
+    svgH = ih + PAD * 2;
+  const X = (m: number) => PAD + m * s;
+  const Y = (m: number) => PAD + m * s;
+  const open = new Set(layout.openings ?? []);
+  const grid: React.ReactElement[] = [];
+  for (let m = 1; m < L; m++) grid.push(<line key={'gx' + m} x1={X(m)} y1={PAD} x2={X(m)} y2={PAD + ih} stroke="rgba(111,161,201,0.09)" strokeWidth={0.6} />);
+  for (let m = 1; m < W; m++) grid.push(<line key={'gy' + m} x1={PAD} y1={Y(m)} x2={PAD + iw} y2={Y(m)} stroke="rgba(111,161,201,0.09)" strokeWidth={0.6} />);
+  const edges: [string, number, number, number, number][] = [
+    ['back', X(0), PAD, X(L), PAD],
+    ['front', X(0), PAD + ih, X(L), PAD + ih],
+    ['left', PAD, Y(0), PAD, Y(W)],
+    ['right', PAD + iw, Y(0), PAD + iw, Y(W)],
+  ];
+  return (
+    <svg viewBox={`0 0 ${svgW} ${svgH}`} className="block w-full" style={{ background: '#0B0C0F' }} role="img" aria-label="展台俯视平面草图">
+      {grid}
+      {edges.map(([side, x1, y1, x2, y2]) => {
+        const o = open.has(side);
+        return <line key={side} x1={x1} y1={y1} x2={x2} y2={y2} stroke={o ? '#6FA1C9' : '#888F9C'} strokeWidth={1.5} strokeDasharray={o ? '3 3' : '0'} opacity={o ? 0.55 : 1} />;
+      })}
+      {layout.zones.map((z, i) => {
+        const st = ZONE_STYLE[z.type ?? 'default'] ?? ZONE_STYLE.default;
+        const cx = X(z.x) + (z.w * s) / 2,
+          cy = Y(z.y) + (z.h * s) / 2;
+        return (
+          <g key={i}>
+            <rect x={X(z.x)} y={Y(z.y)} width={Math.max(0, z.w * s)} height={Math.max(0, z.h * s)} fill={st.fill} stroke={st.stroke} strokeWidth={1} rx={2} />
+            <text x={cx} y={z.note ? cy - 1 : cy + 2.5} textAnchor="middle" fontSize={7} fill="#ECEEF2" fontWeight={500}>
+              {z.name}
+            </text>
+            {z.note && (
+              <text x={cx} y={cy + 8} textAnchor="middle" fontSize={6} fill="#B3B9C4">
+                {z.note}
+              </text>
+            )}
+          </g>
+        );
+      })}
+      <text x={PAD + iw / 2} y={svgH - 7} textAnchor="middle" fontSize={7.5} fill="#6FA1C9" fontFamily="monospace">
+        ← {L}m →
+      </text>
+      <text x={11} y={PAD + ih / 2} textAnchor="middle" fontSize={7.5} fill="#6FA1C9" fontFamily="monospace" transform={`rotate(-90 11 ${PAD + ih / 2})`}>
+        ← {W}m →
+      </text>
+      {layout.facing && (
+        <text x={PAD + iw / 2} y={15} textAnchor="middle" fontSize={6.5} fill="#888F9C">
+          ▲ {layout.facing}
+        </text>
+      )}
+    </svg>
+  );
+}
+
+/* ── 结构化选择卡片（present_choices 工具输出 → 可点击卡片 + 平面草图，零打字回传）── */
+type ChoiceData = {
+  intro?: string;
+  locked?: string[];
+  questions: { key: string; question: string; recommended?: number; options: { label: string; detail?: string; layout?: BoothLayout; sketch?: string }[] }[];
+};
+
+function ChoiceCards({ data, onSubmit, onRefine, busy }: { data: ChoiceData; onSubmit: (text: string) => void; onRefine: (layout: BoothLayout) => void; busy: boolean }) {
+  const [picks, setPicks] = useState<Record<string, number>>({});
+  const [submitted, setSubmitted] = useState(false);
+  const questions = data.questions ?? [];
+  const fmt = (sel: Record<string, number>) =>
+    questions.map((q) => `【${q.question}】→ ${q.options[sel[q.key]]?.label ?? '（未选）'}`).join('\n');
+  const submit = (sel: Record<string, number>) => {
+    if (busy || submitted) return;
+    setSubmitted(true);
+    onSubmit(`我的选择：\n${fmt(sel)}`);
+  };
+  const recommended = () => {
+    const sel: Record<string, number> = {};
+    questions.forEach((q) => {
+      if (typeof q.recommended === 'number') sel[q.key] = q.recommended;
+    });
+    return sel;
+  };
+  const hasRec = questions.some((q) => typeof q.recommended === 'number');
+  const allPicked = questions.length > 0 && questions.every((q) => picks[q.key] != null);
+  const refinable = questions.map((q) => q.options[picks[q.key]]).find((o) => o && o.layout)?.layout;
+
+  if (submitted) {
+    return (
+      <div className="mono-tag flex items-center gap-2 rounded-lg border border-ink-800 bg-ink-850 px-3 py-2 text-ink-400">
+        <span className="inline-block h-1.5 w-1.5 rounded-full bg-accent" /> 已提交选择
+      </div>
+    );
+  }
+  return (
+    <div className="w-full space-y-4 rounded-xl border border-ink-800 bg-ink-850/50 p-4">
+      {data.intro && <p className="text-[13.5px] leading-relaxed text-ink-200">{data.intro}</p>}
+      {data.locked && data.locked.length > 0 && (
+        <div className="rounded-lg border border-ink-800 bg-ink-900 p-3">
+          <div className="mono-tag mb-1.5 text-ink-500">已锁定 / LOCKED</div>
+          <ul className="space-y-1 text-[12.5px] text-ink-300">
+            {data.locked.map((l, i) => (
+              <li key={i}>· {l}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {questions.map((q) => (
+        <div key={q.key} className="space-y-2">
+          <div className="text-[13.5px] font-medium text-ink-50">{q.question}</div>
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+            {q.options.map((o, i) => {
+              const active = picks[q.key] === i;
+              const rec = q.recommended === i;
+              return (
+                <button
+                  key={i}
+                  type="button"
+                  onClick={() => setPicks((p) => ({ ...p, [q.key]: i }))}
+                  className={`u-tap flex flex-col gap-2 rounded-lg border p-2.5 text-left ${active ? 'border-accent bg-accent-soft' : 'border-ink-700 bg-ink-900 hover:border-ink-600'}`}
+                >
+                  <div className="flex items-center gap-1.5">
+                    <span className={`text-[12.5px] font-medium ${active ? 'text-accent' : 'text-ink-100'}`}>{o.label}</span>
+                    {rec && <span className="mono-tag rounded bg-signal-soft px-1 py-0.5 text-signal">荐</span>}
+                  </div>
+                  {o.layout ? (
+                    <div className="overflow-hidden rounded ring-1 ring-ink-800">
+                      <FloorPlan layout={o.layout} />
+                    </div>
+                  ) : o.sketch ? (
+                    <div
+                      className="overflow-hidden rounded bg-ink-950 ring-1 ring-ink-800 [&_svg]:block [&_svg]:h-auto [&_svg]:w-full"
+                      dangerouslySetInnerHTML={{ __html: o.sketch }}
+                    />
+                  ) : null}
+                  {o.detail && <span className="text-[11px] leading-relaxed text-ink-400">{o.detail}</span>}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+      <div className="flex flex-wrap gap-2 pt-1">
+        {refinable && (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => onRefine(refinable)}
+            className="u-press rounded-lg border border-accent/50 bg-accent-soft px-3.5 py-2 text-[13px] text-accent hover:opacity-80 disabled:opacity-40"
+          >
+            ✎ 精调布局并出图
+          </button>
+        )}
+        {hasRec && (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => submit(recommended())}
+            className="u-press rounded-lg bg-accent px-3.5 py-2 text-[13px] font-medium text-ink-950 transition hover:bg-accent-deep disabled:opacity-40"
+          >
+            按推荐来
+          </button>
+        )}
+        <button
+          type="button"
+          disabled={busy || !allPicked}
+          onClick={() => submit(picks)}
+          className="u-press rounded-lg border border-ink-700 px-3.5 py-2 text-[13px] text-ink-100 transition hover:bg-ink-800 disabled:opacity-40"
+        >
+          提交所选
+        </button>
+      </div>
+    </div>
+  );
+}
 
 export default function Workbench() {
   const projectId = String(useParams().projectId ?? 'default');
@@ -81,8 +365,13 @@ export default function Workbench() {
   const [files, setFiles] = useState<File[]>([]);
   const [preview, setPreview] = useState<string | null>(null);
   const [filePreviews, setFilePreviews] = useState<(string | null)[]>([]);
+  const [editor, setEditor] = useState<{ footprint: { length: number; width: number }; modules: LayoutModule[]; openings?: string[] } | null>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const pidRef = useRef(projectId);
+  pidRef.current = projectId; // 每次渲染同步当前 projectId，供存盘防串项目校验
 
-  const { messages, sendMessage, status, error } = useChat({
+  const { messages, sendMessage, status, error, setMessages } = useChat({
     transport: new DefaultChatTransport({ api: '/api/agent', body: { projectId } }),
   });
   const busy = status === 'submitted' || status === 'streaming';
@@ -117,12 +406,51 @@ export default function Workbench() {
       void refreshProjects();
     }
   }, [status, refreshState, refreshProjects]);
-  // 为待发送的图片附件生成本地预览 URL（缩略图 / 悬浮 / 放大用）；files 变化时重建并清理旧的，避免内存泄漏
+  // 为待发送的图片附件生成本地预览 URL；files 变化时重建并清理旧的，避免内存泄漏
   useEffect(() => {
     const urls = files.map((f) => (f.type.startsWith('image/') ? URL.createObjectURL(f) : null));
     setFilePreviews(urls);
     return () => urls.forEach((u) => u && URL.revokeObjectURL(u));
   }, [files]);
+  // 切换 / 重载项目：先清空（避免串项目残留），再拉取该项目的对话历史恢复 messages
+  useEffect(() => {
+    let cancelled = false;
+    setMessages([]);
+    (async () => {
+      try {
+        const r = await fetch(`/api/projects/${projectId}/messages`, { cache: 'no-store' });
+        if (!r.ok || cancelled) return;
+        const data = (await r.json()) as { messages?: unknown };
+        if (!cancelled && Array.isArray(data.messages) && data.messages.length) {
+          setMessages(data.messages as typeof messages);
+        }
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId, setMessages]);
+  // 持久化：messages 一变就 debounce 存盘（流式中也存，确保任何跳转/刷新都不丢对话）。
+  // 用 pidRef 校验：debounce 触发时若已切走项目，不把旧消息存到新项目。
+  useEffect(() => {
+    if (messages.length === 0) return;
+    const pid = projectId;
+    const t = setTimeout(() => {
+      if (pidRef.current !== pid) return; // 已切项目，放弃这次存盘
+      void fetch(`/api/projects/${pid}/messages`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ messages }),
+      }).catch(() => {});
+    }, 700);
+    return () => clearTimeout(t);
+  }, [messages, projectId]);
+  // 新消息 / 流式更新时滚到底
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
+  }, [messages, busy]);
 
   const send = (text: string) => {
     if ((!text.trim() && files.length === 0) || busy) return;
@@ -131,6 +459,30 @@ export default function Workbench() {
     sendMessage({ text: text.trim() || '（请看附件）', files: dt.files });
     setInput('');
     setFiles([]);
+  };
+
+  // 打开布局编辑器，预填所选方案的布局（present_choices 的 layout → 可编辑模块）
+  const openEditor = (layout: BoothLayout) => {
+    setEditor({
+      footprint: { length: layout.length, width: layout.width },
+      openings: layout.openings,
+      modules: (layout.zones || []).map((z, i) => ({ id: 'z' + i, name: z.name, type: z.type || 'default', shape: 'rect' as const, x: z.x, y: z.y, w: z.w, h: z.h })),
+    });
+  };
+  // 编辑器确认：截图存为 reference 资产 → 发消息让大脑 render_from_plan 按它出图
+  const handleEditorConfirm = async (dataUrl: string) => {
+    setEditor(null);
+    try {
+      const r = await fetch(`/api/projects/${projectId}/reference`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ png: dataUrl }),
+      });
+      const d = (await r.json()) as { assetId?: string };
+      if (d.assetId) send(`已用布局编辑器定稿平面图（参考资产 ${d.assetId}）。请调用 render_from_plan 按这张平面图的布局 + identity 出 3D 效果图全套。`);
+    } catch {
+      /* ignore */
+    }
   };
 
   const deleteProj = async (id: string) => {
@@ -145,16 +497,22 @@ export default function Workbench() {
     else void refreshProjects();
   };
 
-  let progress = '大脑思考中…';
+  let progress = '大脑思考中';
+  let activeTool = '';
   for (const m of messages) {
     if (m.role !== 'assistant') continue;
     for (const p of m.parts) {
       if (isToolUIPart(p)) {
         const tp = p as unknown as ToolPartLike;
-        if (tp.state !== 'output-available' && tp.state !== 'output-error') progress = PROGRESS[getToolName(p)] ?? progress;
+        if (tp.state !== 'output-available' && tp.state !== 'output-error') {
+          activeTool = getToolName(p);
+          progress = PROGRESS[activeTool] ?? progress;
+        }
       }
     }
   }
+  // 副标只在真正生图的工具阶段提示"生图较慢"，读状态/写方案等阶段不误导
+  const isRendering = ['generate_best_of_n', 'render_multiview_sheet', 'revise_asset'].includes(activeTool);
 
   const assets = (state?.assets ?? []).slice().reverse();
   // 新建的空项目还没落盘（listProjects 扫不到），前端补一个置顶项以便高亮显示
@@ -164,37 +522,51 @@ export default function Workbench() {
   const currentTitle = shownProjects.find((p) => p.id === projectId)?.title ?? projectId;
 
   return (
-    <main className="flex h-dvh">
-      {/* 左：项目面板 */}
-      <nav className="flex w-60 shrink-0 flex-col border-r border-neutral-200 bg-neutral-50">
-        <div className="flex items-center justify-between px-3 py-3">
-          <span className="text-sm font-semibold">Rhemos</span>
+    <main className="flex h-dvh overflow-hidden bg-ink-900 text-ink-100">
+      {/* ───────── 左：项目面板 ───────── */}
+      <nav className="flex w-64 shrink-0 flex-col border-r border-ink-800 bg-ink-950">
+        {/* 品牌头 */}
+        <div className="flex items-center gap-2.5 px-4 pt-5 pb-4">
+          <span className="inline-block h-2 w-2 shrink-0 rounded-[2px] bg-signal" />
+          <span className="text-[15px] font-semibold tracking-[0.14em] text-ink-50">RHEMOS</span>
+          <span className="mono-tag ml-auto text-ink-500">v2</span>
+        </div>
+
+        <div className="px-3 pb-3">
           <button
             onClick={() => router.push(`/projects/${newProjectId()}`)}
-            className="rounded-md bg-black px-2.5 py-1 text-xs text-white hover:bg-neutral-700"
+            className="u-tap u-press flex w-full items-center justify-center gap-2 rounded-lg border border-ink-700 bg-ink-850 py-2.5 text-[13px] font-medium text-ink-100 hover:border-accent/60 hover:bg-ink-800 hover:text-white"
           >
-            + 新建
+            <PlusIcon /> 新建项目
           </button>
         </div>
+
+        <div className="mono-tag px-4 pb-2 text-ink-500">项目 / Projects</div>
         <div className="flex-1 space-y-1 overflow-y-auto px-2 pb-2">
-          {shownProjects.length === 0 && <p className="px-2 text-xs text-neutral-400">还没有项目</p>}
-          {shownProjects.map((p) => {
+          {shownProjects.length === 0 && <p className="px-2 py-4 text-xs text-ink-500">还没有项目</p>}
+          {shownProjects.map((p, i) => {
             const active = p.id === projectId;
             return (
               <div
                 key={p.id}
                 onClick={() => !active && router.push(`/projects/${p.id}`)}
-                className={`group flex cursor-pointer items-center gap-2 rounded-md p-2 ${active ? 'bg-white shadow-sm ring-1 ring-neutral-200' : 'hover:bg-white/70'}`}
+                className={`group relative flex cursor-pointer items-center gap-2.5 rounded-lg p-2 u-tap ${
+                  active ? 'bg-ink-800' : 'hover:bg-ink-850'
+                }`}
               >
+                {/* active 左光条 */}
+                {active && <span className="absolute left-0 top-1/2 h-5 w-[3px] -translate-y-1/2 rounded-full bg-accent" />}
                 {p.thumbnailUrl ? (
                   // eslint-disable-next-line @next/next/no-img-element
-                  <img src={p.thumbnailUrl} alt="" className="h-9 w-9 shrink-0 rounded object-cover" />
+                  <img src={p.thumbnailUrl} alt="" className="h-10 w-10 shrink-0 rounded-md object-cover ring-1 ring-ink-700" />
                 ) : (
-                  <div className="grid h-9 w-9 shrink-0 place-items-center rounded bg-neutral-200 text-neutral-400">▦</div>
+                  <div className="bp-grid-fine grid h-10 w-10 shrink-0 place-items-center rounded-md bg-ink-900 ring-1 ring-ink-700">
+                    <span className="mono-tag text-ink-600">{String(i + 1).padStart(2, '0')}</span>
+                  </div>
                 )}
                 <div className="min-w-0 flex-1">
-                  <div className="truncate text-xs font-medium text-neutral-700">{p.title}</div>
-                  <div className="text-[10px] text-neutral-400">
+                  <div className={`truncate text-[13px] ${active ? 'font-medium text-ink-50' : 'text-ink-200'}`}>{p.title}</div>
+                  <div className="mono-tag mt-0.5 text-ink-500">
                     {p.assetCount} 张{p.updatedAt ? ` · ${timeAgo(p.updatedAt)}` : ''}
                   </div>
                 </div>
@@ -204,212 +576,327 @@ export default function Workbench() {
                       e.stopPropagation();
                       void deleteProj(p.id);
                     }}
-                    className="hidden shrink-0 px-1 text-neutral-300 hover:text-red-500 group-hover:block"
+                    className="u-tap absolute right-1.5 hidden shrink-0 rounded-md p-1.5 text-ink-500 hover:bg-ink-700 hover:text-signal group-hover:block"
                     title="删除项目"
                   >
-                    ✕
+                    <TrashIcon />
                   </button>
                 )}
               </div>
             );
           })}
         </div>
-        <label className="flex items-center gap-1.5 border-t border-neutral-200 px-3 py-2 text-[11px] text-neutral-500">
-          <input type="checkbox" checked={debug} onChange={(e) => setDebug(e.target.checked)} /> 调试视图（显示工具调用）
+
+        <label className="flex cursor-pointer items-center gap-2 border-t border-ink-800 px-4 py-3 text-[12px] text-ink-400 hover:text-ink-200">
+          <span
+            className={`relative inline-flex h-4 w-7 items-center rounded-full transition-colors ${debug ? 'bg-accent' : 'bg-ink-700'}`}
+          >
+            <span className={`h-3 w-3 rounded-full bg-white transition-transform ${debug ? 'translate-x-3.5' : 'translate-x-0.5'}`} />
+          </span>
+          <input type="checkbox" checked={debug} onChange={(e) => setDebug(e.target.checked)} className="sr-only" />
+          <span className="mono-tag">调试视图</span>
         </label>
       </nav>
 
-      {/* 中：对话 */}
-      <section className="flex min-w-0 flex-1 flex-col">
-        <header className="flex items-center justify-between border-b border-neutral-200 px-4 py-2">
-          <h1 className="truncate text-sm font-medium text-neutral-700">{currentTitle}</h1>
-          <span className="shrink-0 text-[11px] text-neutral-400">展台设计工作台</span>
+      {/* ───────── 中：对话 ───────── */}
+      <section className="flex min-w-0 flex-1 flex-col bg-ink-900">
+        <header className="flex shrink-0 items-center justify-between border-b border-ink-800 px-6 py-3.5">
+          <h1 className="truncate text-[15px] font-medium text-ink-50">{currentTitle}</h1>
+          <span className="mono-tag flex shrink-0 items-center gap-1.5 text-ink-400">
+            <span className={`h-1.5 w-1.5 rounded-full ${busy ? 'bg-signal pulse-dot' : 'bg-accent'}`} />
+            {busy ? '在制中' : 'READY'}
+          </span>
         </header>
 
-        <div className="flex-1 space-y-4 overflow-y-auto p-4">
-          {messages.length === 0 && (
-            <p className="text-sm text-neutral-400">
-              说出你的展台需求（也可上传参考图 / PDF / Word / Excel），Rhemos 会澄清 → 写方案 → 生图 → 交付。深化、换风格、多视角、修改都直接对它说。
-            </p>
-          )}
-          {messages.map((m) => {
-            const imgs = m.role === 'assistant' ? deliveredImages(m.parts) : [];
-            return (
-              <div key={m.id}>
-                <div className="mb-1 text-xs font-medium text-neutral-400">{m.role === 'user' ? '你' : 'Rhemos'}</div>
-                {m.parts.map((part, i) => {
-                  if (part.type === 'text') {
-                    return (
-                      <p key={i} className="whitespace-pre-wrap text-sm leading-relaxed">
-                        {part.text}
-                      </p>
-                    );
-                  }
-                  if (part.type === 'file') {
-                    const fp = part as unknown as { url?: string; mediaType?: string; filename?: string };
-                    if (fp.mediaType?.startsWith('image/') && fp.url) {
-                      return (
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img key={i} src={fp.url} alt="附件" onClick={() => setPreview(fp.url!)} className="mt-1 max-h-40 cursor-zoom-in rounded border border-neutral-200" />
-                      );
-                    }
-                    return (
-                      <p key={i} className="mt-1 text-xs text-neutral-500">
-                        📎 {fp.filename ?? '附件'}
-                      </p>
-                    );
-                  }
-                  if (debug && isToolUIPart(part)) {
-                    const tp = part as unknown as ToolPartLike;
-                    return (
-                      <details key={i} className="mt-1 rounded border border-amber-200 bg-amber-50 p-1.5 text-[11px]">
-                        <summary className="cursor-pointer font-mono text-neutral-600">
-                          🔧 {getToolName(part)} · {tp.state}
-                        </summary>
-                        {tp.input != null && <pre className="mt-1 max-h-32 overflow-auto text-neutral-500">{JSON.stringify(tp.input, null, 2)}</pre>}
-                        {tp.output != null && <pre className="mt-1 max-h-32 overflow-auto text-neutral-700">{JSON.stringify(tp.output, null, 2)}</pre>}
-                      </details>
-                    );
-                  }
-                  return null;
-                })}
-                {imgs.length > 0 && (
-                  <div className="mt-2 flex flex-wrap gap-3">
-                    {imgs.map((img) => (
-                      <figure key={img.url} className="m-0">
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img src={img.url} alt="交付结果" onClick={() => setPreview(img.url)} className="max-h-80 cursor-zoom-in rounded-md border border-neutral-200" title="点击放大" />
-                        <figcaption className="mt-0.5 text-[11px] font-medium text-emerald-600">{img.label}</figcaption>
-                      </figure>
-                    ))}
-                  </div>
-                )}
+        <div ref={scrollRef} className="bp-grid flex-1 overflow-y-auto px-6 py-6">
+          <div className="mx-auto flex max-w-3xl flex-col gap-6">
+            {messages.length === 0 && (
+              <div className="fade-up mt-[10vh] flex flex-col items-center text-center">
+                <span className="mono-tag text-ink-600">RHEMOS · BOOTH DESIGN AGENT</span>
+                <h2 className="mt-4 max-w-md text-2xl font-semibold leading-snug text-ink-50">说出你的展台需求</h2>
+                <p className="mt-3 max-w-md text-[13.5px] leading-relaxed text-ink-300">
+                  也可上传参考图 / PDF / Word / Excel。Rhemos 会澄清 → 写方案 → 并行生图 → 客观择优 → 交付。深化、换风格、多视角、修改都直接对它说。
+                </p>
+                <div className="mt-7 flex w-full max-w-lg flex-col gap-2">
+                  {SUGGESTIONS.map((s, i) => (
+                    <button
+                      key={s}
+                      onClick={() => {
+                        setInput(s);
+                        inputRef.current?.focus();
+                      }}
+                      className="u-tap group flex items-center gap-3 rounded-lg border border-ink-800 bg-ink-850/60 px-4 py-3 text-left text-[13px] text-ink-200 hover:border-accent/50 hover:bg-ink-800 hover:text-ink-50"
+                    >
+                      <span className="mono-tag text-ink-600 group-hover:text-accent">{String(i + 1).padStart(2, '0')}</span>
+                      {s}
+                    </button>
+                  ))}
+                </div>
               </div>
-            );
-          })}
-          {busy && <p className="text-xs text-neutral-400">{progress}（生图较慢，请稍候）</p>}
-          {error && !busy && (
-            <p className="rounded bg-red-50 px-3 py-2 text-xs text-red-600">出错了，请重试一次。若反复失败，点左上角「+ 新建」重开对话。</p>
-          )}
-        </div>
+            )}
 
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            send(input);
-          }}
-          className="border-t border-neutral-200 p-3"
-        >
-          {files.length > 0 && (
-            <div className="mb-2 flex flex-wrap gap-2">
-              {files.map((f, i) => {
-                const url = filePreviews[i];
-                const ext = (f.name.split('.').pop() || 'file').toUpperCase();
-                return (
-                  <div key={i} className="group relative">
-                    {url ? (
-                      <>
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img
-                          src={url}
-                          alt={f.name}
-                          onClick={() => setPreview(url)}
-                          className="h-14 w-14 cursor-zoom-in rounded-md border border-neutral-200 object-cover"
-                          title="点击放大"
-                        />
-                        {/* 悬浮预览：hover 时浮在缩略图上方 */}
-                        <div className="pointer-events-none absolute bottom-full left-0 z-30 mb-2 hidden group-hover:block">
-                          {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img src={url} alt="" className="max-h-64 max-w-xs rounded-lg border border-neutral-200 bg-white shadow-xl" />
-                        </div>
-                      </>
-                    ) : (
-                      <div className="flex h-14 w-44 items-center gap-2 rounded-md border border-neutral-200 bg-white px-2" title={f.name}>
-                        <div className="grid h-9 w-9 shrink-0 place-items-center rounded bg-neutral-100 text-[9px] font-bold text-neutral-500">
-                          {ext.slice(0, 4)}
-                        </div>
-                        <span className="truncate text-xs text-neutral-600">{f.name}</span>
+            {messages.map((m) => {
+              const imgs = m.role === 'assistant' ? deliveredImages(m.parts) : [];
+              const isUser = m.role === 'user';
+              return (
+                <div key={m.id} className={`fade-up flex flex-col gap-2 ${isUser ? 'items-end' : 'items-start'}`}>
+                  {!isUser && (
+                    <div className="mono-tag flex items-center gap-1.5 text-ink-500">
+                      <span className="inline-block h-1.5 w-1.5 rounded-[1px] bg-accent" /> RHEMOS
+                    </div>
+                  )}
+                  <div className={`flex flex-col gap-2 ${isUser ? 'items-end' : 'w-full items-start'}`}>
+                    {m.parts.map((part, i) => {
+                      if (part.type === 'text') {
+                        if (!part.text.trim()) return null;
+                        return isUser ? (
+                          <div key={i} className="max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-br-md bg-ink-800 px-4 py-2.5 text-[14px] leading-relaxed text-ink-50">
+                            {part.text}
+                          </div>
+                        ) : (
+                          <div key={i} className="w-full">
+                            <Prose>{part.text}</Prose>
+                          </div>
+                        );
+                      }
+                      if (part.type === 'file') {
+                        const fp = part as unknown as { url?: string; mediaType?: string; filename?: string };
+                        if (fp.mediaType?.startsWith('image/') && fp.url) {
+                          return (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img key={i} src={fp.url} alt="附件" onClick={() => setPreview(fp.url!)} className="max-h-44 cursor-zoom-in rounded-lg ring-1 ring-ink-700 transition hover:ring-accent/60" title="点击放大" />
+                          );
+                        }
+                        return (
+                          <div key={i} className="flex items-center gap-2 rounded-lg border border-ink-700 bg-ink-850 px-3 py-2 text-[12px] text-ink-300">
+                            <PaperclipIcon className="text-ink-500" /> {fp.filename ?? '附件'}
+                          </div>
+                        );
+                      }
+                      // present_choices：始终渲染成可点击卡片（用户交互，非调试）
+                      if (isToolUIPart(part) && getToolName(part) === 'present_choices') {
+                        const tp = part as unknown as ToolPartLike;
+                        if (tp.state === 'output-available' && tp.output) {
+                          return <ChoiceCards key={i} data={tp.output as ChoiceData} onSubmit={(t) => send(t)} onRefine={openEditor} busy={busy} />;
+                        }
+                        return null;
+                      }
+                      if (debug && isToolUIPart(part)) {
+                        const tp = part as unknown as ToolPartLike;
+                        return (
+                          <details key={i} className="w-full rounded-lg border border-ink-700 bg-ink-850 p-2 text-[11px]">
+                            <summary className="mono-tag cursor-pointer text-accent">
+                              {getToolName(part)} · {tp.state}
+                            </summary>
+                            {tp.input != null && <pre className="mt-2 max-h-40 overflow-auto font-mono text-[11px] text-ink-400">{JSON.stringify(tp.input, null, 2)}</pre>}
+                            {tp.output != null && <pre className="mt-2 max-h-40 overflow-auto font-mono text-[11px] text-ink-200">{JSON.stringify(tp.output, null, 2)}</pre>}
+                          </details>
+                        );
+                      }
+                      return null;
+                    })}
+
+                    {imgs.length > 0 && (
+                      <div className="mt-1 flex w-full flex-wrap gap-3">
+                        {imgs.map((img) => {
+                          const rec = img.label === '推荐';
+                          return (
+                            <figure key={img.url} className="group relative m-0">
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                              <img
+                                src={img.url}
+                                alt="交付结果"
+                                onClick={() => setPreview(img.url)}
+                                className={`max-h-96 cursor-zoom-in rounded-xl ring-1 transition group-hover:brightness-105 ${rec ? 'ring-signal/40' : 'ring-ink-700'}`}
+                                title="点击放大"
+                              />
+                              <figcaption
+                                className={`mono-tag absolute left-3 top-3 flex items-center gap-1 rounded-md px-2 py-1 backdrop-blur-sm ${
+                                  rec ? 'bg-signal/15 text-signal' : 'bg-ink-950/60 text-ink-200'
+                                }`}
+                              >
+                                {rec && <span className="inline-block h-1.5 w-1.5 rounded-full bg-signal" />}
+                                {rec ? '推荐交付' : '交付'}
+                              </figcaption>
+                            </figure>
+                          );
+                        })}
                       </div>
                     )}
-                    <button
-                      type="button"
-                      onClick={() => setFiles(files.filter((_, j) => j !== i))}
-                      title="移除"
-                      className="absolute -right-1.5 -top-1.5 z-10 hidden h-4 w-4 items-center justify-center rounded-full bg-neutral-700 text-[10px] leading-none text-white group-hover:flex"
-                    >
-                      ×
-                    </button>
                   </div>
-                );
-              })}
-            </div>
-          )}
-          <div className="flex items-center gap-2">
-            {/* label 关联触发：点 label 由浏览器原生打开文件框，不依赖 .click()，
-                避免 display:none input 在 Safari 等浏览器点击无反应的经典坑。input 用 sr-only（非 display:none）。 */}
-            <input
-              id="rhemos-upload"
-              type="file"
-              multiple
-              accept="image/*,.pdf,.docx,.xlsx,.xls"
-              className="sr-only"
-              onChange={(e) => {
-                // 必须先同步读出文件再清空：setFiles 的 updater 是延迟执行的闭包，
-                // 若在其中读 e.target.files，会读到被下一行 value='' 清空后的空列表
-                // （经典 React 事件陷阱）——表现为"选了文件却毫无反应"。
-                const picked = Array.from(e.target.files ?? []);
-                e.target.value = ''; // 允许重复选同一文件
-                if (picked.length) setFiles((cur) => [...cur, ...picked]);
-              }}
-            />
-            <label
-              htmlFor="rhemos-upload"
-              title="上传图片 / PDF / Word / Excel"
-              className={`flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-md border border-neutral-300 text-neutral-600 hover:border-neutral-500 ${busy ? 'pointer-events-none opacity-40' : ''}`}
-            >
-              <PaperclipIcon />
-            </label>
-            <input
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              placeholder="描述你的展台需求…"
-              className="flex-1 rounded-md border border-neutral-300 px-3 py-2 text-sm outline-none focus:border-neutral-500"
-            />
-            <VoiceInputButton disabled={busy} onTranscribed={(t) => setInput((c) => (c.trim() ? `${c.trim()} ${t}` : t))} />
-            <button type="submit" disabled={busy} className="rounded-md bg-black px-4 py-2 text-sm text-white disabled:opacity-40">
-              发送
-            </button>
+                </div>
+              );
+            })}
+
+            {busy && (
+              <div className="fade-up flex items-center gap-3 rounded-lg border border-ink-800 bg-ink-850 px-4 py-3">
+                <span className="relative flex h-4 w-4 items-center justify-center">
+                  <span className="absolute h-4 w-4 rounded-full border border-accent/30" />
+                  <span className="h-2 w-2 rounded-full bg-accent pulse-dot" />
+                </span>
+                <span className="text-[13px] text-ink-100">{progress}…</span>
+                <span className="mono-tag ml-auto text-ink-500">{isRendering ? 'RENDERING · 生图较慢' : 'WORKING'}</span>
+              </div>
+            )}
+            {error && !busy && (
+              <div className="rounded-lg border border-signal/30 bg-signal-soft px-4 py-3 text-[13px] text-signal">
+                出错了，请重试一次。若反复失败，点左上角「新建项目」重开对话。
+              </div>
+            )}
           </div>
-        </form>
+        </div>
+
+        {/* composer */}
+        <div className="shrink-0 px-6 pb-6 pt-2">
+          <div className="mx-auto max-w-3xl">
+            {files.length > 0 && (
+              <div className="mb-2 flex flex-wrap gap-2">
+                {files.map((f, i) => {
+                  const url = filePreviews[i];
+                  const ext = (f.name.split('.').pop() || 'file').toUpperCase();
+                  return (
+                    <div key={i} className="group relative">
+                      {url ? (
+                        <>
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={url}
+                            alt={f.name}
+                            onClick={() => setPreview(url)}
+                            className="h-14 w-14 cursor-zoom-in rounded-lg object-cover ring-1 ring-ink-700"
+                            title="点击放大"
+                          />
+                          <div className="pointer-events-none absolute bottom-full left-0 z-30 mb-2 hidden group-hover:block">
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img src={url} alt="" className="max-h-64 max-w-xs rounded-lg ring-1 ring-ink-600 shadow-2xl shadow-black/60" />
+                          </div>
+                        </>
+                      ) : (
+                        <div className="flex h-14 w-48 items-center gap-2.5 rounded-lg border border-ink-700 bg-ink-850 px-2.5" title={f.name}>
+                          <div className="mono-tag grid h-9 w-9 shrink-0 place-items-center rounded-md bg-accent-soft text-accent">{ext.slice(0, 4)}</div>
+                          <span className="truncate text-[12px] text-ink-200">{f.name}</span>
+                        </div>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => setFiles(files.filter((_, j) => j !== i))}
+                        title="移除"
+                        className="absolute -right-1.5 -top-1.5 z-10 hidden h-5 w-5 items-center justify-center rounded-full bg-ink-700 text-ink-100 ring-2 ring-ink-900 hover:bg-signal group-hover:flex"
+                      >
+                        <CloseIcon className="h-3 w-3" />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            <div className="u-tap rounded-2xl border border-ink-700 bg-ink-850 p-2.5 focus-within:border-accent/60 focus-within:shadow-[0_0_0_3px] focus-within:shadow-accent/10">
+              <textarea
+                ref={inputRef}
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => {
+                  // Enter 发送；Shift+Enter 换行；输入法组字中不误发
+                  if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+                    e.preventDefault();
+                    send(input);
+                  }
+                }}
+                rows={1}
+                placeholder="描述你的展台需求，或粘贴 / 上传参考资料…"
+                className="max-h-40 min-h-[40px] w-full resize-none bg-transparent px-2 py-1.5 text-[14px] leading-relaxed text-ink-50 outline-none placeholder:text-ink-500"
+              />
+              <div className="mt-1 flex items-center gap-1.5">
+                {/* label 关联触发：浏览器原生打开文件框，不依赖 .click()（避免 display:none 在 Safari 点击无反应）。input 用 sr-only。 */}
+                <input
+                  id="rhemos-upload"
+                  type="file"
+                  multiple
+                  accept="image/*,.pdf,.docx,.xlsx,.xls"
+                  className="sr-only"
+                  onChange={(e) => {
+                    // 必须先同步读出文件再清空：setFiles 的 updater 是延迟闭包，
+                    // 若在其中读 e.target.files 会读到被下一行 value='' 清空后的空列表（经典 React 事件陷阱）。
+                    const picked = Array.from(e.target.files ?? []);
+                    e.target.value = '';
+                    if (picked.length) setFiles((cur) => [...cur, ...picked]);
+                  }}
+                />
+                <label
+                  htmlFor="rhemos-upload"
+                  title="上传图片 / PDF / Word / Excel"
+                  className={`u-tap flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-lg text-ink-400 hover:bg-ink-700 hover:text-ink-100 ${busy ? 'pointer-events-none opacity-40' : ''}`}
+                >
+                  <PaperclipIcon />
+                </label>
+                <VoiceInputButton disabled={busy} onTranscribed={(t) => setInput((c) => (c.trim() ? `${c.trim()} ${t}` : t))} />
+                <span className="mono-tag ml-auto hidden text-ink-600 sm:block">Enter 发送 · Shift+Enter 换行</span>
+                <button
+                  type="button"
+                  onClick={() => send(input)}
+                  disabled={busy || (!input.trim() && files.length === 0)}
+                  className="u-press flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-accent text-ink-950 transition hover:bg-accent-deep disabled:bg-ink-700 disabled:text-ink-500"
+                  title="发送"
+                >
+                  <SendIcon />
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       </section>
 
-      {/* 右：资产画廊 */}
-      <aside className="flex w-72 shrink-0 flex-col overflow-y-auto border-l border-neutral-200 bg-neutral-50 p-3">
-        <h2 className="mb-2 text-xs font-semibold text-neutral-500">资产画廊（{assets.length}）</h2>
-        {assets.length === 0 && <p className="text-xs text-neutral-400">还没有图。对中间说出需求即可生成。</p>}
-        <div className="grid grid-cols-1 gap-2">
-          {assets.map((a, idx) => (
-            <figure key={a.id} className="m-0 overflow-hidden rounded-md border border-neutral-200 bg-white">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={a.url} alt={a.kind} onClick={() => setPreview(a.url)} className="w-full cursor-zoom-in" title="点击放大" />
-              <figcaption className="flex items-center justify-between px-2 py-1 text-[10px] text-neutral-500">
-                <span>
-                  {idx === 0 && <span className="mr-1 rounded bg-emerald-100 px-1 text-emerald-700">最新</span>}
-                  {a.kind === 'multiview' ? '多视角全貌' : '效果图'}
-                </span>
-                <a href={a.url} download className="text-neutral-700 underline">
-                  下载
-                </a>
-              </figcaption>
-            </figure>
-          ))}
+      {/* ───────── 右：资产画廊 ───────── */}
+      <aside className="flex w-72 shrink-0 flex-col border-l border-ink-800 bg-ink-950">
+        <header className="flex shrink-0 items-baseline justify-between border-b border-ink-800 px-4 py-3.5">
+          <span className="mono-tag text-ink-400">资产 / Assets</span>
+          <span className="font-mono text-[15px] tabular-nums text-ink-100">{String(assets.length).padStart(2, '0')}</span>
+        </header>
+        <div className="flex-1 overflow-y-auto p-3">
+          {assets.length === 0 && (
+            <div className="bp-grid-fine mt-6 rounded-lg border border-dashed border-ink-700 px-4 py-10 text-center">
+              <p className="text-[12.5px] leading-relaxed text-ink-500">还没有图。<br />对中间说出需求即可生成。</p>
+            </div>
+          )}
+          <div className="flex flex-col gap-3">
+            {assets.map((a, idx) => (
+              <figure key={a.id} className="u-tap group m-0 overflow-hidden rounded-lg border border-ink-800 bg-ink-900 hover:border-ink-600">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={a.url} alt={a.kind} onClick={() => setPreview(a.url)} className="w-full cursor-zoom-in transition group-hover:brightness-105" title="点击放大" />
+                <figcaption className="flex items-center justify-between px-2.5 py-2">
+                  <span className="flex items-center gap-1.5">
+                    <span className="mono-tag text-ink-600">#{String(assets.length - idx).padStart(2, '0')}</span>
+                    {idx === 0 && <span className="mono-tag rounded bg-accent-soft px-1.5 py-0.5 text-accent">最新</span>}
+                    <span className="text-[11px] text-ink-300">{assetKindLabel(a.kind)}</span>
+                  </span>
+                  <a href={a.url} download className="u-tap rounded-md p-1 text-ink-400 hover:bg-ink-800 hover:text-ink-100" title="下载">
+                    <DownloadIcon />
+                  </a>
+                </figcaption>
+              </figure>
+            ))}
+          </div>
         </div>
       </aside>
 
+      {/* ───────── lightbox ───────── */}
       {preview && (
-        <div onClick={() => setPreview(null)} className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-6">
+        <div onClick={() => setPreview(null)} className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-ink-950/92 p-8 backdrop-blur-sm">
+          <div className="mono-tag mb-3 flex items-center gap-2 text-ink-400">
+            <span className="h-1.5 w-1.5 rounded-full bg-accent" /> 预览 · 点击任意处关闭
+          </div>
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={preview} alt="预览" className="max-h-full max-w-full rounded shadow-2xl" />
+          <img src={preview} alt="预览" className="max-h-[82vh] max-w-full rounded-xl ring-1 ring-ink-700 shadow-2xl shadow-black/70" />
+        </div>
+      )}
+
+      {editor && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink-950/92 p-6 backdrop-blur-sm">
+          <div className="max-h-full overflow-auto rounded-xl border border-ink-800 bg-ink-900 p-5">
+            <div className="mb-3 text-[14px] font-medium text-ink-50">布局编辑器 · 拖拽 / 缩放 / 改形状，确认后按它出 3D 图</div>
+            <LayoutEditorDyn footprint={editor.footprint} initial={editor.modules} openings={editor.openings} onConfirm={handleEditorConfirm} onCancel={() => setEditor(null)} />
+          </div>
         </div>
       )}
     </main>
