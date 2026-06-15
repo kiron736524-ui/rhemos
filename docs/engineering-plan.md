@@ -240,10 +240,23 @@ loop (大脑自主):
 - [ ] （暂缓）per-角度独立高清重绘：用户满意 sheet 后再单独高清化。
 - **验收**：一句"给我多视角全貌" → 大脑出一张四视角自洽的 sheet。
 
-### Phase 4 · 工程化收尾
-- [ ] ASR（DashScope）接入；成本监控；approval 边界（若引入破坏性操作）；前瞻预热（可选）
-- [ ] storage 预留接口对接（DB/Blob，按需）
-- **验收**：端到端可用；成本可观测。
+### Phase 4 · 产品骨架（隔离 + 用户可见层边界）· 据架构批评优化
+> 走向产品的第一优先级不是加模型能力，而是**隔离 / 沉淀 / 边界**。以下都不依赖部署决定，现在就能做。
+- [x] **ASR 语音输入**（Fun-ASR 直连 + DeepSeek V4 Flash 清理 + 录音前端）—— 已完成。
+- [ ] **四概念落地**：project / session / run / asset 在存储与 URL 立住（`/projects/:projectId`、`/projects/:projectId/chat/:sessionId`）。温和版：进页面自动建 project、用户无感，点"新项目/历史"再显性化。storage 从 `DEFAULT_PROJECT` 改 projectId-keyed。
+- [ ] **inspection 沉淀回 asset（修 bug）**：`generate_best_of_n`/`revise_asset` 判图结果写回 `Asset.inspections` + lineage(`parentId`)，否则 `read_project_state` 永远空、大脑丢记忆。
+- [ ] **用户态 / 调试态 UI 分层**（解与"自检隐形"D8 的矛盾）：工作台 = ChatPanel(无原始工具日志) + SpecCard(当前方案,可确认/改) + AssetGallery(推荐/候选/修订/多视图) + ActionBar(继续深化/换风格/多视图/重生/下载/新项目)；DebugDrawer 仅开发模式露工具调用/评分/prompt。**用户级进度旁白**("正在整理方案/生成候选/筛选/修正结构")，不露评分。
+- [ ] **用户选图=强信号**：选某候选"用这张继续"→ 后续围绕它，不自动改选 recommended。**重生(开分支) vs 改图(派生 parentId)** 语义在 UX 显性化。
+- [ ] **薄代码级不变量（非 FSM）**：生图前必须有 spec、预算、用户选图锁定 等"必须项"写成工具前置条件(代码硬保证)；排序/判断仍归大脑。
+- [ ] **轻并发安全**：per-project 原子写 / 写锁（不上 DB）。
+- **验收**：多项目互不污染；用户只见两端 + 资产、工具过程进调试抽屉；选图被尊重；inspection 有记忆。
+
+### Phase 5 · 生产化（部署时做；当前 deploy/auth 已缓，见 DECISIONS D13）
+- [ ] **真持久化**：DB(Postgres/Prisma) + 对象存储(Blob) + 签名 URL + CDN/cache（替本地 `.data` + 开放的 `/api/assets`）。
+- [ ] **auth + 多租户 + 限流/配额**。
+- [ ] **成本核算**(按 user/project/model/quality) + telemetry + 取消/重试/降级策略。
+- [ ] **长任务承托**：job/队列/Workflow checkpoint（解 serverless `maxDuration` 限制，替 `maxDuration=600`）。
+- **验收**：可公开部署、多用户、成本可观测、长任务不超时。
 
 ---
 

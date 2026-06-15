@@ -33,5 +33,10 @@
 ## 多视图（Phase 3 方向）
 - **D17 · 多视图 = 单图 turnaround sheet（一张图四视角），非四张独立图**。实测（`scripts/multiview-spike.mjs`）：`images.edit` 图像条件化经 Gateway **404 不可用**；单图 sheet **一次渲染 = 天然同一展台**（Sonnet 判 72，前/左/右/俯视平面自洽），而分图独立生成会漂（正是 rhemax 全套锁定机制的根因）。故走 sheet。改进：prompt **强制角度分明** + best-of-N 选最一致 + 提高画幅(1536)/quality。**per-角度独立高清重绘**（用户满意后单独做）属 drift 回归的难活，**暂缓**。落点：Phase 3 `render_multiview_sheet` 工具 + 重写 `multiview.md`（删锁定机制）。
 
+## 产品化路线（据架构批评优化 Phase 4/5）
+- **D18 · Phase 4 重切为"产品骨架"**：走向产品第一优先级是隔离/沉淀/边界，不是加模型能力。Phase 4 = 四概念(project/session/run/asset)+projectId 入 URL/存储、inspection 沉淀回 asset(修真 bug)、用户态/调试态 UI 分层(解 D8"自检隐形"与当前 UI 摊工具日志的矛盾)、用户选图=强信号、薄代码级不变量。均不依赖部署。
+- **D19 · 生产化归 Phase 5**（部署时做）：DB/对象存储/签名URL/CDN、auth/多租户/限流、成本核算/取消重试降级/telemetry、长任务队列/Workflow checkpoint(解 maxDuration)。因 deploy/auth 已缓(D13)，现在做是空中楼阁。
+- **D20 · 稳定性不靠 FSM，靠薄代码级不变量**：回应"缺状态机=风险"——不重引 FSM(违 D7)，而把少数必须项(生图前有 spec/预算/用户选图锁定)写成**工具前置条件**(代码硬保证)，其余排序判断仍归大脑。硬连必须项+破坏性闸门，不回退 if-else 大杂烩。
+
 ## 进度
 Phase 0（接线 + 连通 spike）· Phase 1（最小 Loop Agent：澄清 + 智能提问）· Phase 2（best-of-N 自省闭环）已完成并实测。**Phase 3**（一致性 subagent，多视图）/ **Phase 4**（ASR、持久化、approval 闸门、成本监控、AI Elements）未做 —— 见 `engineering-plan.md`。
