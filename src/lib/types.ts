@@ -2,7 +2,9 @@ export type AssetKind = 'booth-image' | 'multiview' | 'reference';
 
 export interface InspectionResult {
   pass: boolean;
-  verdict: string; // 结构化批评文本（客观硬伤）
+  score?: number;
+  fails?: string[];
+  summary?: string;
   model: string;
   at: string;
 }

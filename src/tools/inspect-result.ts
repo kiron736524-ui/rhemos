@@ -1,20 +1,23 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { DEFAULT_PROJECT, loadAssetBytes, readState } from '@/lib/storage';
-import { inspectImage } from '@/agent/inspect';
+import { addInspection, loadAssetBytes, projectIdFromContext, readState } from '@/lib/storage';
+import { inspectImage, toInspectionResult } from '@/agent/inspect';
+import { MODEL_IDS } from '@/models/gateway';
 
 export const inspectResult = tool({
   description:
-    '视觉判图（内部用，对用户隐形）：对照客观要点检查某资产，返回 score/fails/summary。用于临时核对或 revise 后复检（generate_best_of_n 已内置判图，无需重复）。结果只驱动你自己纠正，不要原样转给用户。',
+    '视觉判图（内部用，对用户隐形）：对照客观要点检查某资产，返回 score/fails/summary 并沉淀回资产历史。用于临时核对或 revise 后复检（generate_best_of_n 已内置判图，无需重复）。结果只驱动你自己纠正，不要原样转给用户。',
   inputSchema: z.object({
     assetId: z.string().describe('要判图的资产 id'),
     criteria: z.string().describe('客观判图要点（来自 DesignSpec.selfCheckCriteria / 意图）'),
   }),
-  execute: async ({ assetId, criteria }) => {
-    const state = await readState(DEFAULT_PROJECT);
-    if (!state.assets.find((a) => a.id === assetId)) return { error: `未找到资产 ${assetId}` };
-    const bytes = await loadAssetBytes(DEFAULT_PROJECT, assetId);
+  execute: async ({ assetId, criteria }, opts) => {
+    const pid = projectIdFromContext((opts as { experimental_context?: unknown }).experimental_context);
+    const s = await readState(pid);
+    if (!s.assets.find((a) => a.id === assetId)) return { error: `未找到资产 ${assetId}` };
+    const bytes = await loadAssetBytes(pid, assetId);
     const insp = await inspectImage(bytes, criteria);
+    await addInspection(pid, assetId, toInspectionResult(insp, MODEL_IDS.inspect));
     return { assetId, ...insp };
   },
 });

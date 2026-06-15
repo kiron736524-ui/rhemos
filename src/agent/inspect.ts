@@ -1,6 +1,7 @@
 import { generateObject } from 'ai';
 import { z } from 'zod';
 import { inspector } from '@/models/gateway';
+import type { InspectionResult } from '@/lib/types';
 
 // 结构化客观判图：score 可比较，便于 best-of-N 排序；fails 触发修复门。
 export const inspectionSchema = z.object({
@@ -10,11 +11,7 @@ export const inspectionSchema = z.object({
 });
 export type Inspection = z.infer<typeof inspectionSchema>;
 
-export async function inspectImage(
-  bytes: Uint8Array,
-  criteria: string,
-  modelId?: string,
-): Promise<Inspection> {
+export async function inspectImage(bytes: Uint8Array, criteria: string, modelId?: string): Promise<Inspection> {
   const { object } = await generateObject({
     model: inspector(modelId),
     schema: inspectionSchema,
@@ -61,4 +58,27 @@ export async function inspectSheet(bytes: Uint8Array, modelId?: string): Promise
     ],
   });
   return object;
+}
+
+// —— 沉淀回资产（Asset.inspections）的转换 ——
+export function toInspectionResult(insp: Inspection, model: string): InspectionResult {
+  return {
+    pass: insp.fails.length === 0,
+    score: insp.score,
+    fails: insp.fails,
+    summary: insp.summary,
+    model,
+    at: new Date().toISOString(),
+  };
+}
+
+export function sheetToInspectionResult(insp: SheetInspection, model: string): InspectionResult {
+  return {
+    pass: insp.sameBoothAcrossPanels && insp.anglesDistinct,
+    score: insp.consistencyScore,
+    fails: insp.issues,
+    summary: insp.sameBoothAcrossPanels ? '多视图：同一展台' : '多视图：疑似不一致',
+    model,
+    at: new Date().toISOString(),
+  };
 }

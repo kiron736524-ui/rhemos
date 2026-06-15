@@ -1,9 +1,9 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
-import type { Asset, DesignSpec, ProjectState } from './types';
+import type { Asset, DesignSpec, InspectionResult, ProjectState } from './types';
 
-// Phase 1-2：本地文件系统存储（暂不接 DB/Blob）。单一默认 project。
+// 本地文件系统存储（Phase 4：projectId-keyed 隔离 + per-project 写锁；DB/Blob 留 Phase 5）。
 const ROOT = path.join(process.cwd(), '.data', 'projects');
 export const DEFAULT_PROJECT = 'default';
 
@@ -11,27 +11,50 @@ const projDir = (id: string) => path.join(ROOT, id);
 const assetsDir = (id: string) => path.join(projDir(id), 'assets');
 const statePath = (id: string) => path.join(projDir(id), 'state.json');
 
+/** 从工具的 experimental_context 取 projectId（由 /api/agent 注入）；非法则回退 default。 */
+export function projectIdFromContext(ctx: unknown): string {
+  const id = (ctx as { projectId?: unknown } | undefined)?.projectId;
+  return typeof id === 'string' && /^[\w-]+$/.test(id) ? id : DEFAULT_PROJECT;
+}
+
+// per-project 写串行化：同一 project 的并发请求不竞写 state.json（进程内；跨进程需 DB，Phase 5）。
+const locks = new Map<string, Promise<unknown>>();
+function withLock<T>(id: string, fn: () => Promise<T>): Promise<T> {
+  const run = (locks.get(id) ?? Promise.resolve()).then(fn, fn);
+  locks.set(
+    id,
+    run.then(
+      () => {},
+      () => {},
+    ),
+  );
+  return run;
+}
+
 export async function readState(id: string = DEFAULT_PROJECT): Promise<ProjectState> {
   const p = statePath(id);
-  if (existsSync(p)) {
-    return JSON.parse(await readFile(p, 'utf8')) as ProjectState;
-  }
+  if (existsSync(p)) return JSON.parse(await readFile(p, 'utf8')) as ProjectState;
   return { id, brief: {}, assets: [], updatedAt: new Date().toISOString() };
 }
 
-export async function writeState(state: ProjectState): Promise<void> {
+async function writeStateUnlocked(state: ProjectState): Promise<void> {
   await mkdir(projDir(state.id), { recursive: true });
   state.updatedAt = new Date().toISOString();
   await writeFile(statePath(state.id), JSON.stringify(state, null, 2), 'utf8');
 }
 
-export async function setSpec(id: string, spec: DesignSpec): Promise<void> {
-  const state = await readState(id);
-  state.spec = spec;
-  await writeState(state);
+export function writeState(state: ProjectState): Promise<void> {
+  return withLock(state.id, () => writeStateUnlocked(state));
 }
 
-// 注意：并行生图时不要并行调用本函数（会竞写 state.json）。先并行生成字节，再顺序保存。
+export function setSpec(id: string, spec: DesignSpec): Promise<void> {
+  return withLock(id, async () => {
+    const s = await readState(id);
+    s.spec = spec;
+    await writeStateUnlocked(s);
+  });
+}
+
 export async function saveAsset(
   id: string,
   bytes: Uint8Array,
@@ -40,7 +63,7 @@ export async function saveAsset(
   await mkdir(assetsDir(id), { recursive: true });
   const assetId = `${meta.kind}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const file = path.join(assetsDir(id), `${assetId}.png`);
-  await writeFile(file, bytes);
+  await writeFile(file, bytes); // 唯一文件名，无需锁
   const asset: Asset = {
     id: assetId,
     kind: meta.kind,
@@ -51,13 +74,25 @@ export async function saveAsset(
     url: `/api/assets/${assetId}?project=${id}`,
     createdAt: new Date().toISOString(),
   };
-  const state = await readState(id);
-  state.assets.push(asset);
-  await writeState(state);
+  await withLock(id, async () => {
+    const s = await readState(id);
+    s.assets.push(asset);
+    await writeStateUnlocked(s);
+  });
   return asset;
 }
 
+/** 把判图结果沉淀回资产历史（修 bug：之前判完不写回，read_project_state 永远空）。 */
+export function addInspection(id: string, assetId: string, insp: InspectionResult): Promise<void> {
+  return withLock(id, async () => {
+    const s = await readState(id);
+    const a = s.assets.find((x) => x.id === assetId);
+    if (!a) return;
+    (a.inspections ??= []).push(insp);
+    await writeStateUnlocked(s);
+  });
+}
+
 export async function loadAssetBytes(id: string, assetId: string): Promise<Uint8Array> {
-  const file = path.join(assetsDir(id), `${assetId}.png`);
-  return new Uint8Array(await readFile(file));
+  return new Uint8Array(await readFile(path.join(assetsDir(id), `${assetId}.png`)));
 }

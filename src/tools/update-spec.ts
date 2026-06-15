@@ -1,6 +1,6 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { DEFAULT_PROJECT, setSpec } from '@/lib/storage';
+import { projectIdFromContext, setSpec } from '@/lib/storage';
 
 export const updateSpec = tool({
   description:
@@ -10,13 +10,9 @@ export const updateSpec = tool({
     invariants: z.array(z.string()).default([]).describe('跨视图不可变量（尺寸/开口/墙位/品牌位置/材质色温等）'),
     selfCheckCriteria: z.string().describe('客观判图要点：本图应满足的结构/物理/空间/品牌落位要点'),
   }),
-  execute: async ({ narrative, invariants, selfCheckCriteria }) => {
-    await setSpec(DEFAULT_PROJECT, {
-      narrative,
-      invariants,
-      selfCheckCriteria,
-      updatedAt: new Date().toISOString(),
-    });
+  execute: async ({ narrative, invariants, selfCheckCriteria }, opts) => {
+    const pid = projectIdFromContext((opts as { experimental_context?: unknown }).experimental_context);
+    await setSpec(pid, { narrative, invariants, selfCheckCriteria, updatedAt: new Date().toISOString() });
     return { saved: true };
   },
 });
