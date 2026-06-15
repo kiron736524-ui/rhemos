@@ -3,17 +3,13 @@ import { gateway } from '@ai-sdk/gateway';
 import { MODEL_IDS } from '@/models/gateway';
 import { buildSystemPrompt } from './system-prompt';
 import { analyzeReference } from '@/tools/analyze-reference';
-import { generateBestOfN } from '@/tools/generate-best-of-n';
-import { inspectResult } from '@/tools/inspect-result';
 import { readProjectState } from '@/tools/read-project-state';
 import { reviseAsset } from '@/tools/revise-asset';
 import { taskComplete } from '@/tools/task-complete';
 import { updateSpec } from '@/tools/update-spec';
 import { updateBrief } from '@/tools/update-brief';
-import { renderMultiviewSheet } from '@/tools/render-multiview-sheet';
-import { generateViews } from '@/tools/generate-views';
 import { presentChoices } from '@/tools/present-choices';
-import { renderFromPlan } from '@/tools/render-from-plan';
+import { render } from '@/tools/render';
 
 // 工具注册表（名字即大脑看到的工具名）
 export const tools = {
@@ -22,11 +18,7 @@ export const tools = {
   analyze_reference: analyzeReference,
   update_brief: updateBrief,
   update_spec: updateSpec,
-  generate_best_of_n: generateBestOfN,
-  generate_views: generateViews,
-  render_from_plan: renderFromPlan,
-  render_multiview_sheet: renderMultiviewSheet,
-  inspect_result: inspectResult,
+  render: render,
   revise_asset: reviseAsset,
   task_complete: taskComplete,
 };
@@ -38,11 +30,9 @@ function imageBudget(maxImages: number): StopCondition<typeof tools> {
     for (const s of steps) {
       for (const c of s.toolCalls ?? []) {
         const ci = (c as { input?: { n?: number; views?: unknown[] } }).input;
-        if (c.toolName === 'generate_best_of_n' || c.toolName === 'render_multiview_sheet') {
-          imgs += ci?.n ?? 1;
-        } else if (c.toolName === 'generate_views' || c.toolName === 'render_from_plan') {
-          // 进化链：主图 + 每个视角各 n 张
-          imgs += (ci?.n ?? 2) * (1 + (ci?.views?.length ?? 3));
+        if (c.toolName === 'render') {
+          // 主图 + 每个视角各 n 张（single 模式 views=0）
+          imgs += (ci?.n ?? 2) * (1 + (ci?.views?.length ?? 0));
         } else if (c.toolName === 'revise_asset') {
           imgs += 1;
         }

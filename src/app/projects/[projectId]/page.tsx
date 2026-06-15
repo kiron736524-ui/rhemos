@@ -36,12 +36,12 @@ type ToolPartLike = { state?: string; input?: unknown; output?: unknown };
 
 const PROGRESS: Record<string, string> = {
   read_project_state: '读取项目状态',
+  present_choices: '准备选择卡片',
+  update_brief: '记录确认事实',
   update_spec: '整理设计方案',
-  generate_best_of_n: '并行生成候选并择优',
-  render_multiview_sheet: '渲染多视角全貌',
+  render: '生成效果图',
   revise_asset: '定向修正结构',
   analyze_reference: '分析参考图',
-  inspect_result: '客观核对结果',
 };
 
 const SUGGESTIONS = [
@@ -551,7 +551,7 @@ export default function Workbench() {
       modules: (layout.zones || []).map((z, i) => ({ id: 'z' + i, name: z.name, type: z.type || 'default', shape: 'rect' as const, x: z.x, y: z.y, w: z.w, h: z.h })),
     });
   };
-  // 编辑器确认：截图存为 reference 资产 → 发消息让大脑 render_from_plan 按它出图
+  // 编辑器确认：截图存为 reference 资产 → 发消息让大脑用 render（planAssetId）按它出图
   const handleEditorConfirm = async (dataUrl: string) => {
     setEditor(null);
     try {
@@ -561,7 +561,7 @@ export default function Workbench() {
         body: JSON.stringify({ png: dataUrl }),
       });
       const d = (await r.json()) as { assetId?: string };
-      if (d.assetId) send(`已用布局编辑器定稿平面图（参考资产 ${d.assetId}）。请调用 render_from_plan 按这张平面图的布局 + identity 出 3D 效果图全套。`);
+      if (d.assetId) send(`已用布局编辑器定稿平面图（参考资产 ${d.assetId}）。请用 render（planAssetId=该参考资产）按这张平面图的布局出 3D 效果图全套。`);
     } catch {
       /* ignore */
     }
@@ -594,7 +594,7 @@ export default function Workbench() {
     }
   }
   // 副标只在真正生图的工具阶段提示"生图较慢"，读状态/写方案等阶段不误导
-  const isRendering = ['generate_best_of_n', 'render_multiview_sheet', 'revise_asset'].includes(activeTool);
+  const isRendering = ['render', 'revise_asset'].includes(activeTool);
 
   const assets = (state?.assets ?? []).slice().reverse();
   // 新建的空项目还没落盘（listProjects 扫不到），前端补一个置顶项以便高亮显示

@@ -10,7 +10,7 @@
 |---|---|
 | 换模型 / 模型句柄 | `src/models/gateway.ts`（脑 / 文生图 / **参考条件化 Gemini** / 判图 / 清理 + `generateImageFromRefs` 参考生图 + `withRenderStyle` 画风锚）|
 | 改大脑行为 / 工作循环 / 铁律 | `src/agent/system-prompt.ts`（PREAMBLE）|
-| 改领域知识（提问/判图/生图法/展台规则）| `src/knowledge/skills/*` + `src/knowledge/rubrics/*`（见 `src/knowledge/README.md`）|
+| 改领域知识（决策型在大脑 / 执行型在 prompt-writer）| `src/knowledge/skills/*` + `src/knowledge/rubrics/*`（D26 分流：大脑装决策型 7 skill + 2 rubric；写图细节 6 skill 归 `prompt-writer`）|
 | 加 / 改工具 | `src/tools/*.ts` → 注册在 `src/agent/orchestrator.ts` |
 | 循环退出 / 生图预算 | `src/agent/orchestrator.ts`（`stopWhen` / `imageBudget`）|
 | 判图逻辑（结构化打分）| `src/agent/inspect.ts` |
@@ -22,7 +22,8 @@
 | 前端工作台（三栏暗色科技）| `src/app/projects/[projectId]/page.tsx`（面板 / 对话 / 画廊 / 上传 / **卡片** / **markdown** / lightbox）；`src/app/page.tsx` 仅 redirect→default |
 | 卡片提问 / 选项卡 + 俯视草图 | `src/tools/present-choices.ts` + 前端 `ChoiceCards`/`FloorPlan`（page.tsx）|
 | 布局编辑器（拖拽/缩放/L形/截图喂生图）| `src/components/LayoutEditor.tsx`(react-konva) + `/layout-demo` 演示页 |
-| 多视角一致性 / 平面图条件化生图 | `src/tools/{generate-views,render-from-plan}.ts`（identity + 进化式参考链 + 门控）|
+| 生图（**唯一入口**）/ 多视角 / 平面图条件化 | `src/tools/render.ts`（中文意图 → prompt-writer → best-of-N / 进化链 / 平面图条件化 + 门控）|
+| 写图 prompt（子 agent）| `src/agent/prompt-writer.ts`（中文意图 → 英文五层 prompt，带执行型知识；中间产物不回流大脑）|
 | 对话持久化 | `src/lib/storage.ts`(conversation) + `api/projects/[id]/messages` + page.tsx 流式存盘 effect |
 | **为什么这么设计** | `docs/DECISIONS.md` |
 | 架构全貌（as-built） | `docs/ARCHITECTURE.md` |
