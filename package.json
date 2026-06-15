@@ -12,11 +12,13 @@
     "@ai-sdk/gateway": "^3.0.131",
     "@ai-sdk/react": "^3.0.207",
     "ai": "^6.0.205",
+    "mammoth": "^1.12.0",
     "next": "16.2.9",
     "openai": "^6.42.0",
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "undici": "^8.4.1",
+    "xlsx": "^0.18.5",
     "zod": "^4.4.3"
   },
   "devDependencies": {
