@@ -9,6 +9,7 @@ import { readProjectState } from '@/tools/read-project-state';
 import { reviseAsset } from '@/tools/revise-asset';
 import { taskComplete } from '@/tools/task-complete';
 import { updateSpec } from '@/tools/update-spec';
+import { renderMultiviewSheet } from '@/tools/render-multiview-sheet';
 
 // 工具注册表（名字即大脑看到的工具名）
 export const tools = {
@@ -16,6 +17,7 @@ export const tools = {
   analyze_reference: analyzeReference,
   update_spec: updateSpec,
   generate_best_of_n: generateBestOfN,
+  render_multiview_sheet: renderMultiviewSheet,
   inspect_result: inspectResult,
   revise_asset: reviseAsset,
   task_complete: taskComplete,
@@ -27,7 +29,7 @@ function imageBudget(maxImages: number): StopCondition<typeof tools> {
     let imgs = 0;
     for (const s of steps) {
       for (const c of s.toolCalls ?? []) {
-        if (c.toolName === 'generate_best_of_n') {
+        if (c.toolName === 'generate_best_of_n' || c.toolName === 'render_multiview_sheet') {
           imgs += (c as { input?: { n?: number } }).input?.n ?? 1;
         } else if (c.toolName === 'revise_asset') {
           imgs += 1;
