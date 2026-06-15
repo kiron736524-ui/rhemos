@@ -7,7 +7,7 @@
 ## 现状
 - ✅ **Phase 0-4** Loop Agent 全链路（澄清 → 方案 → 生图 → 判图择优 → 修 → 交付）· projectId 隔离 · 多模态上传 · ASR 语音
 - ✅ **UI 颠覆**：暗色 · 工程制图科技（rhemax 黑红蓝 `#1A1815/#BF4136/#5D85A8`），作品在暗场发光；assistant 走 markdown 渲染
-- ✅ **卡片式提问**：所有澄清走可点选卡片（零打字）+ 俯视布局草图；可拖入 **react-konva 布局编辑器**（拖拽 / 缩放 / L 形）精调
+- ✅ **卡片式提问 + 布局编辑器**：澄清走可点选卡片（零打字）；方案定稿后**自动弹 react-konva 布局编辑器**（拖拽 / 缩放 / L 形精调，或一键跳过）→ 截图喂生图
 - ✅ **工业级一致性**：identity 身份锁定 + 画风锚 + **进化式参考链**（judge 门控）+ **平面图条件化生图**（编辑器截图 → 喂模型出贴合布局的 3D）
 - ✅ 对话持久化（流式存盘，切项目 / 刷新不丢）
 - ⬜ **Phase 5** 生产化（DB / auth / 成本核算 / 部署）
@@ -16,7 +16,7 @@
 
 ## 技术栈
 Next.js 16 + React 19 + TypeScript + **AI SDK 6** + **Vercel AI Gateway**（模型唯一来源）。UI：Tailwind 4 暗色 token + react-markdown（assistant 渲染）+ **react-konva**（2D 布局编辑器，`toDataURL` 截图喂生图）。
-脑 `anthropic/claude-opus-4.8` · 文生图 `openai/gpt-image-2` · **参考条件化 / 编辑 `google/gemini-3-pro-image`**（换角度 / 平面图条件化，一致性强）· 判图 `anthropic/claude-sonnet-4.6` · 语音清理 `deepseek/deepseek-v4-flash`（均经 Gateway）· ASR `fun-asr-realtime`（DashScope，唯一非 Gateway 例外）。
+脑 `anthropic/claude-opus-4.8` · 文生图 `openai/gpt-image-2` · **参考条件化 / 编辑 `google/gemini-3-pro-image`**（换角度 / 平面图条件化；可选 gpt-image-2 直连）· **判图 + 写 prompt `anthropic/claude-opus-4.8`**（升 Opus，质量优先）· 语音清理 `deepseek/deepseek-v4-flash`（均经 Gateway）· ASR `fun-asr-realtime`（DashScope）+ gpt-image-2 图编辑（OpenAI 直连）为 Gateway 例外。
 docx/xlsx 上传服务端提取（mammoth / **ExcelJS**，含大小/行数/文本上限防护）；图片/PDF Opus 4.8 原生识别。
 
 ## 快速开始

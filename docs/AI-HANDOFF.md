@@ -8,7 +8,7 @@
 ## 60 秒定位：想改 X → 去看 Y
 | 想做什么 | 去哪 |
 |---|---|
-| 换模型 / 模型句柄 | `src/models/gateway.ts`（脑 / 文生图 / **参考条件化 Gemini** / 判图 / 清理 + `generateImageFromRefs` 参考生图 + `withRenderStyle` 画风锚）|
+| 换模型 / 模型句柄 | `src/models/gateway.ts`（脑 Opus / 文生图 gpt-image-2 / **参考条件化 Gemini（+gpt-image-2 直连）** / **判图+写prompt 现 Opus** / 清理 + `generateImageFromRefs` + `withRenderStyle` 画风锚）|
 | 改大脑行为 / 工作循环 / 铁律 | `src/agent/system-prompt.ts`（PREAMBLE）|
 | 改领域知识（决策型在大脑 / 执行型在 prompt-writer）| `src/knowledge/skills/*` + `src/knowledge/rubrics/*`（D26 分流：大脑装决策型 7 skill + 2 rubric；写图细节 6 skill 归 `prompt-writer`）|
 | 加 / 改工具 | `src/tools/*.ts` → 注册在 `src/agent/orchestrator.ts` |
@@ -31,7 +31,7 @@
 | 连通性 / 并发 / 画质实测脚本 | `scripts/*.mjs`（`node --env-file .env.local scripts/<x>.mjs`）|
 
 ## 不变量（不要破坏）
-1. **模型唯一经 Gateway**（`src/models/gateway.ts`）；ASR(DashScope) 是唯一例外。
+1. **模型唯一经 Gateway**（`src/models/gateway.ts`）；例外：ASR(DashScope) 直连、gpt-image-2 图编辑（有 `OPENAI_API_KEY` 时直连，因 Gateway 不代理 `images.edit`，见 D27）。
 2. **自检对用户隐形**：客观缺陷大脑内部处理、主观口味走对话，**绝不给用户报告 / 半成品**。
 3. **品牌无素材只占位**、不臆造文字 / Logo。
 4. 知识层是大脑的**参考与判断工具**，不是死板脚本；**不要重建 FSM / blockingField** 那套调度机器。
@@ -48,9 +48,9 @@
 - **多轮 400**：UIMessage 回传后历史里 `tool_use.input` 可能是空串 `""` → Gateway 400。route 的 `sanitizeToolInputs` 把非对象入参兜成 `{}`。
 - **改 `/api/**/route.ts` 后 dev server 热重载可能不生效**：重启或 curl 闭环验证，别只读代码就认定生效（前端 bundle 与 API route 分别编译）。
 - **headless 预览测不了文件上传交互**：合成 click 不弹文件框、合成 change 触发的 onChange 也别"看到事件就算验证"；真实选文件流程交给用户或 Claude-in-Chrome `file_upload` 确认。
-- **图像编辑 / 参考图：走 `generateText` + input image part 经 `gemini-3-pro-image`，不是 `images.edit`**（后者经 Gateway 仍 404）——纠正 D17。封装在 `gateway.ts` 的 `generateImageFromRefs`。
+- **图像编辑 / 参考图：默认走 `generateText` + input image part 经 `gemini-3-pro-image`**（gpt-image-2 经 Gateway 图输入实测 4 路全不通：chat/responses 拒 "image model"、`images.edit` 404，见 D27）。要用 gpt-image-2 须**直连 OpenAI**——`generateImageFromRefs` 有 `OPENAI_API_KEY` 自动走直连、否则回退 Gemini。
 - **多视角一致性**：单参考换角度方差大（实测 62~88，故 best-of-N 择优是刚需）；累积参考链能提升一致性，但**把漂移图当参考会传染漂移** → 必须判图门控（仅通过的进参考池，`CONSISTENCY_GATE=70`）。`generate_views` 是落地。
-- **平面图条件化最强**：用户在 `LayoutEditor` 拖好布局 → `stage.toDataURL()` 截图 → `render_from_plan` 以平面图为硬参考出 3D，比纯文字 prompt 精确一个量级。
+- **平面图条件化最强**：方案定稿 → `present_layout` **自动弹** `LayoutEditor` → 用户拖好 → `toDataURL()` 截图 → `render`(planAssetId) 以平面图为硬参考出 3D，比纯文字 prompt 精确一个量级。
 - **react-konva 要 `dynamic(ssr:false)`**（用 canvas，SSR 报错）；canvas 内对象不是 DOM，preview_click 点不到（要真鼠标）。
 - **dev 模式偶发跳 default**：新动态路由（`/projects/<新id>`）+ agent 长 SSE 流交织时整页 reload→根→redirect default。用左栏"新建项目"(SPA) 正常；对话已流式存盘不丢；**生产 build 无此问题**。
 - **生图画风锚**：`RENDER_STYLE_ANCHOR`+`withRenderStyle` 代码层强制注入工业渲染风，否则 gpt-image-2 漂向 CG/插画/示意图（尤其 turnaround sheet 措辞）。
