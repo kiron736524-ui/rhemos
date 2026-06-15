@@ -13,4 +13,4 @@ Rhemos = 展台设计 **Loop Agent**（rhemax v2，greenfield 重建）。用户
 - **自检对用户隐形**——绝不给用户"半成品 + 改进报告"。
 
 ## 现状
-Phase 0/1/2 完成，可跑：`npm run dev` → http://localhost:3000。Phase 3/4 见 `docs/engineering-plan.md`。
+Phase 0-4 完成，可跑：`npm run dev` → http://localhost:3000（三栏工作台：左项目面板 / 中对话 / 右资产画廊；支持多模态上传与语音输入）。Phase 5（生产化：DB/auth/成本/部署）见 `docs/engineering-plan.md`。

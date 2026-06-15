@@ -14,9 +14,11 @@
 | 加 / 改工具 | `src/tools/*.ts` → 注册在 `src/agent/orchestrator.ts` |
 | 循环退出 / 生图预算 | `src/agent/orchestrator.ts`（`stopWhen` / `imageBudget`）|
 | 判图逻辑（结构化打分）| `src/agent/inspect.ts` |
-| 存储 / 数据形状 | `src/lib/storage.ts` + `src/lib/types.ts` |
-| API 入口 | `src/app/api/agent/route.ts`；图片读出 `src/app/api/assets/[id]/route.ts` |
-| 前端 | `src/app/page.tsx`（useChat + 工具调用可视化）|
+| 存储 / 数据形状 / 项目列表 | `src/lib/storage.ts`（projectId-keyed + 写锁 + `listProjects`/`deleteProject`）+ `src/lib/types.ts` |
+| API 入口 | `src/app/api/agent/route.ts`（tool 入参兜底 + 附件预处理）；图片读出 `assets/[id]`；项目列表/删除 `projects/` + `projects/[id]`；项目状态 `projects/[id]/state`；语音 `asr` |
+| 上传附件提取（docx→文字+内嵌图 / xlsx→CSV）| `src/lib/attachments.ts`（mammoth / SheetJS）|
+| 语音输入 ASR | `src/lib/asr/{funasr,cleanup}.ts` + `src/components/VoiceInputButton.tsx` |
+| 前端工作台（三栏）| `src/app/projects/[projectId]/page.tsx`（项目面板 / 对话 / 画廊 / 上传 / lightbox）；`src/app/page.tsx` 仅 redirect→default |
 | **为什么这么设计** | `docs/DECISIONS.md` |
 | 架构全貌（as-built） | `docs/ARCHITECTURE.md` |
 | 路线图 / 还没做的 | `docs/engineering-plan.md` |
@@ -36,9 +38,13 @@
 - **high 不能对 best-of-N + revise**（3×200s 会超时）；全闭环带 revise ≈ 3.7min。
 - 流式进度靠 Agent 循环本身（文字流 + 工具状态），**不是 partial 预览帧**。
 - 并行生图后**顺序** `saveAsset`（否则竞写 `state.json`）。
+- **文件上传两坑**（`projects/[projectId]/page.tsx`）：① file input 别 `display:none`（Safari 下 `.click()` 不弹文件框）→ 用 `<label htmlFor>` 关联 + `sr-only`；② `onChange` 里 `setFiles` 的 updater 是**延迟闭包**，别在其中读 `e.target.files`（会被同步行 `value=''` 清空）→ 先 `const picked = Array.from(e.target.files ?? [])` 再清空。
+- **多轮 400**：UIMessage 回传后历史里 `tool_use.input` 可能是空串 `""` → Gateway 400。route 的 `sanitizeToolInputs` 把非对象入参兜成 `{}`。
+- **改 `/api/**/route.ts` 后 dev server 热重载可能不生效**：重启或 curl 闭环验证，别只读代码就认定生效（前端 bundle 与 API route 分别编译）。
+- **headless 预览测不了文件上传交互**：合成 click 不弹文件框、合成 change 触发的 onChange 也别"看到事件就算验证"；真实选文件流程交给用户或 Claude-in-Chrome `file_upload` 确认。
 
 ## 现状
-Phase 0（接线/连通）· Phase 1（最小 Loop Agent：澄清+智能提问）· Phase 2（best-of-N 自省闭环）已完成并实测。Phase 3（一致性 subagent，多视图）/ Phase 4（ASR、持久化、approval、成本监控、AI Elements UI）未做。
+Phase 0-4 完成并实测：Phase 0 接线 · Phase 1 最小 Loop Agent（澄清+智能提问）· Phase 2 best-of-N 自省闭环 · Phase 3 多视图 turnaround sheet · Phase 4 产品骨架（projectId 隔离 / 三栏工作台 / 多模态上传 / ASR 语音 / inspection 沉淀回 asset / per-project 写锁）。Phase 5（生产化：DB / auth / 成本核算 / 部署 / 长任务队列）未做，见 `engineering-plan.md`。
 
 ## 深入阅读顺序
 `docs/ARCHITECTURE.md`（如何建）→ `docs/DECISIONS.md`（为何这么定）→ `docs/engineering-plan.md`（路线图）→ `docs/domain-knowledge.md` + `src/knowledge/README.md`（领域知识层）→ `rhemos-build-plan.md`（最初策略基线）。

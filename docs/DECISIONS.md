@@ -1,6 +1,6 @@
 # Rhemos · 决策日志
 
-> 每条 = 决策 · 为什么 · 落点。要抓任何关键决策点，看这里。状态：截至 Phase 2（2026-06-14）。
+> 每条 = 决策 · 为什么 · 落点。要抓任何关键决策点，看这里。状态：截至 Phase 4（2026-06-15）。
 
 ## 定位与范式
 - **D1 · greenfield rhemos = rhemax v2**：不迁移旧代码，只参考旧领域知识。为何：技术栈差太大、要按 Loop Agent 重构、不被旧框架绑架。落点：整个 `~/rhemos`，关联 GitHub `kiron736524-ui/rhemos`。
@@ -9,7 +9,7 @@
 ## 模型与平台
 - **D3 · Vercel AI Gateway 为唯一模型源**（ASR 例外）：一个 key 路由全部。为何：统一/监控/fallback、契合"大脑动态选工具"。落点：`models/gateway.ts`。
 - **D4 · 脑=Opus 4.8 · 生图=gpt-image-2 · 判图=Sonnet 4.6**：脑+生图由用户指定；判图选 Sonnet（成本/质量平衡，实测能做结构/物理推理）。**inspector 基准测试待做**（候选 Opus/Gemini 3.x Pro/GPT-5，见 `INSPECT_CANDIDATES`）。
-- **D5 · 视频砍掉；ASR 沿用阿里云百炼/DashScope**（唯一非 Gateway 例外，key 在 `.env.local`，**尚未接线**）。
+- **D5 · 视频砍掉；ASR 用 DashScope Fun-ASR**（唯一非 Gateway 例外，China region）。**Phase 4 已接线**：`fun-asr-realtime` 转写 + `deepseek-v4-flash`（经 Gateway）清理去语气词；落点 `src/lib/asr/*` + `api/asr` + `VoiceInputButton`。
 - **D6 · 生图走 OpenAI SDK 经 Gateway 兼容端点**（非 AI SDK `generateImage`）：因 `generateImage` 一次性、且要精确控 quality/size/n。落点：`gateway.ts` 的 `openaiViaGateway`、`tools/generate-best-of-n.ts`。
 
 ## 架构与体验
@@ -36,7 +36,10 @@
 ## 产品化路线（据架构批评优化 Phase 4/5）
 - **D18 · Phase 4 重切为"产品骨架"**：走向产品第一优先级是隔离/沉淀/边界，不是加模型能力。Phase 4 = 四概念(project/session/run/asset)+projectId 入 URL/存储、inspection 沉淀回 asset(修真 bug)、用户态/调试态 UI 分层(解 D8"自检隐形"与当前 UI 摊工具日志的矛盾)、用户选图=强信号、薄代码级不变量。均不依赖部署。
 - **D19 · 生产化归 Phase 5**（部署时做）：DB/对象存储/签名URL/CDN、auth/多租户/限流、成本核算/取消重试降级/telemetry、长任务队列/Workflow checkpoint(解 maxDuration)。因 deploy/auth 已缓(D13)，现在做是空中楼阁。
-- **D20 · 稳定性不靠 FSM，靠薄代码级不变量**：回应"缺状态机=风险"——不重引 FSM(违 D7)，而把少数必须项(生图前有 spec/预算/用户选图锁定)写成**工具前置条件**(代码硬保证)，其余排序判断仍归大脑。硬连必须项+破坏性闸门，不回退 if-else 大杂烩。
+- **D20 · 稳定性不靠 FSM，靠薄代码级不变量**：回应"缺状态机=风险"——不重引 FSM(违 D7)，而把少数必须项(生图前有 spec/预算/用户选图锁定)写成**工具前置条件**(代码硬保证)，其余排序判断仍归大脑。硬连必须项+破坏性闸门，不回退 if-else 大杂烩。（**尚未落地**，与"用户选图=强信号"一起留作 Phase 4 余项。）
+
+## 多模态上传（Phase 4 补充）
+- **D21 · 上传走服务端提取，不靠模型直读 Office**：图片/PDF 由 Opus 4.8 原生识别（原样传）；docx 用 mammoth 提正文+内嵌图、xlsx 用 SheetJS 转 CSV，再以 text/file part 注入消息。落点 `src/lib/attachments.ts`，route 在 `convertToModelMessages` 前预处理。**实测坑**：file input 别 `display:none`（Safari 点击不弹框→用 `<label htmlFor>`+`sr-only`）；onChange 别在 `setFiles` 闭包里读 `e.target.files`（会被同步行 `value=''` 清空→先同步读出再清空）。
 
 ## 进度
-Phase 0（接线 + 连通 spike）· Phase 1（最小 Loop Agent：澄清 + 智能提问）· Phase 2（best-of-N 自省闭环）已完成并实测。**Phase 3**（一致性 subagent，多视图）/ **Phase 4**（ASR、持久化、approval 闸门、成本监控、AI Elements）未做 —— 见 `engineering-plan.md`。
+Phase 0（接线 + 连通 spike）· Phase 1（最小 Loop Agent）· Phase 2（best-of-N 自省闭环）· Phase 3（多视图 turnaround sheet）· Phase 4（projectId 隔离 / 三栏工作台 / 多模态上传 / ASR / inspection 沉淀 / per-project 写锁）已完成并实测。**Phase 4 余项**（用户选图=强信号、薄代码级不变量）+ **Phase 5**（DB / auth / 成本核算 / 部署 / 长任务队列）未做 —— 见 `engineering-plan.md`。

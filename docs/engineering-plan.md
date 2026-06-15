@@ -1,8 +1,8 @@
-# Rhemos 工程执行计划（v0.1 · 待批准）
+# Rhemos 工程执行计划
 
 > 配套文档：策略与决策见 [`../rhemos-build-plan.md`](../rhemos-build-plan.md)；领域知识层（大脑的"灵魂"）见 [`./domain-knowledge.md`](./domain-knowledge.md)。
 > 本文回答「**怎么建**」：技术栈 → 从大到小的架构 → 模块分解 → 关键数据结构与控制流 → 分阶段任务与验收。
-> 本阶段不写应用代码，批准后按第 5 节执行。
+> 进度：Phase 0-4 已实现并实测（详见第 5 节各项勾选）；Phase 5（生产化）待部署时做。
 
 ---
 
@@ -234,22 +234,23 @@ loop (大脑自主):
 
 ### Phase 3 · 多视图（单图 turnaround sheet）· 实测定型
 > 实测（`scripts/multiview-spike.mjs`）：`images.edit` 图像条件化经 Gateway **404 不可用**；单图 sheet 一次渲染**天然一致**(Sonnet 72，胜分图)。故**弃 rhemax 全套锁定机制**（不再做 identity-spec 重注入/坐标锚图/失败重试/十几轮 subagent）。
-- [ ] `render_multiview_sheet` 工具：best-of-N 出 2×2 turnaround sheet（前/左/右/俯视平面，**默认 high/1536，n≤2 并行**）→ Sonnet 判（同一展台 + 角度分明 + 平面合理）择优 → 交付。
-- [ ] 重写 `src/knowledge/skills/multiview.md`：sheet prompt 模板（**强制角度分明 + 平面图**），删除锁定机制。
-- [ ] 注册工具 + system-prompt 告知大脑何时用（用户要"多视角全貌"）；单张 money shot 仍走 hero best-of-N。
+- [x] `render_multiview_sheet` 工具：best-of-N 出 2×2 turnaround sheet（前/左/右/俯视平面，**high/1536；默认 n=1 提速，可设 2 择优**）→ Sonnet 判（同一展台 + 角度分明 + 平面合理）择优 → 交付。
+- [x] 重写 `src/knowledge/skills/multiview.md`：sheet prompt 模板（**强制角度分明 + 平面图**），删除锁定机制。
+- [x] 注册工具 + system-prompt 告知大脑何时用（用户要"多视角全貌"）；单张 money shot 仍走 hero best-of-N。
 - [ ] （暂缓）per-角度独立高清重绘：用户满意 sheet 后再单独高清化。
-- **验收**：一句"给我多视角全貌" → 大脑出一张四视角自洽的 sheet。
+- **验收**：✅ 一句"给我多视角全貌" → 大脑出一张四视角自洽的 sheet。
 
 ### Phase 4 · 产品骨架（隔离 + 用户可见层边界）· 据架构批评优化
-> 走向产品的第一优先级不是加模型能力，而是**隔离 / 沉淀 / 边界**。以下都不依赖部署决定，现在就能做。
-- [x] **ASR 语音输入**（Fun-ASR 直连 + DeepSeek V4 Flash 清理 + 录音前端）—— 已完成。
-- [ ] **四概念落地**：project / session / run / asset 在存储与 URL 立住（`/projects/:projectId`、`/projects/:projectId/chat/:sessionId`）。温和版：进页面自动建 project、用户无感，点"新项目/历史"再显性化。storage 从 `DEFAULT_PROJECT` 改 projectId-keyed。
-- [ ] **inspection 沉淀回 asset（修 bug）**：`generate_best_of_n`/`revise_asset` 判图结果写回 `Asset.inspections` + lineage(`parentId`)，否则 `read_project_state` 永远空、大脑丢记忆。
-- [ ] **用户态 / 调试态 UI 分层**（解与"自检隐形"D8 的矛盾）：工作台 = ChatPanel(无原始工具日志) + SpecCard(当前方案,可确认/改) + AssetGallery(推荐/候选/修订/多视图) + ActionBar(继续深化/换风格/多视图/重生/下载/新项目)；DebugDrawer 仅开发模式露工具调用/评分/prompt。**用户级进度旁白**("正在整理方案/生成候选/筛选/修正结构")，不露评分。
-- [ ] **用户选图=强信号**：选某候选"用这张继续"→ 后续围绕它，不自动改选 recommended。**重生(开分支) vs 改图(派生 parentId)** 语义在 UX 显性化。
-- [ ] **薄代码级不变量（非 FSM）**：生图前必须有 spec、预算、用户选图锁定 等"必须项"写成工具前置条件(代码硬保证)；排序/判断仍归大脑。
-- [ ] **轻并发安全**：per-project 原子写 / 写锁（不上 DB）。
-- **验收**：多项目互不污染；用户只见两端 + 资产、工具过程进调试抽屉；选图被尊重；inspection 有记忆。
+> 走向产品的第一优先级不是加模型能力，而是**隔离 / 沉淀 / 边界**。以下都不依赖部署决定。
+- [x] **ASR 语音输入**（Fun-ASR 直连 + DeepSeek V4 Flash 清理 + 录音前端 `VoiceInputButton`）。
+- [x] **projectId 隔离落地**：storage 从单一 `DEFAULT_PROJECT` 改 projectId-keyed（`.data/projects/<id>/`）；projectId 入 URL（`/projects/:projectId`）并注入工具 `experimental_context`。左侧项目面板：列表 / 切换载入 / 新建 / 删除 / 当前高亮。（session / run 子层暂缓，projectId 已够隔离。）
+- [x] **inspection 沉淀回 asset**：`generate_best_of_n`/`revise_asset`/`render_multiview_sheet` 判图结果经 `addInspection` 写回 `Asset.inspections`，修了"判完不写回 → `read_project_state` 永远空"的真 bug。
+- [x] **用户态 / 调试态 UI 分层**：三栏工作台（项目面板 / 对话 / 资产画廊）；交付图进对话气泡（"✓ 推荐"标记），工具过程默认隐藏、**调试开关**才露；**用户级进度旁白**（"正在整理方案/生成候选/筛选/修正结构"），不露评分。
+- [x] **多模态上传**（计划外补充）：图片/PDF（Opus 原生）+ Word（mammoth 提取正文+内嵌图）+ Excel（SheetJS 转 CSV），服务端 `src/lib/attachments.ts` 预处理；附件 Claude 式缩略图 / 悬浮预览 / 单击放大 / 文件卡片。
+- [x] **轻并发安全**：per-project 写锁（`withLock`，进程内串行化 state.json 写）。
+- [ ] **用户选图=强信号**（未做）：选某候选"用这张继续"→ 后续围绕它、不自动改选 recommended；重生(开分支) vs 改图(派生 parentId) 在 UX 显性化。
+- [ ] **薄代码级不变量（非 FSM）**（未做）：生图前必须有 spec / 预算 / 用户选图锁定 等写成工具前置条件（代码硬保证）。
+- **验收**：✅ 多项目互不污染、用户只见两端+资产、inspection 有记忆、上传/语音可用；⬜ 选图强信号 + 薄不变量待补。
 
 ### Phase 5 · 生产化（部署时做；当前 deploy/auth 已缓，见 DECISIONS D13）
 - [ ] **真持久化**：DB(Postgres/Prisma) + 对象存储(Blob) + 签名 URL + CDN/cache（替本地 `.data` + 开放的 `/api/assets`）。
