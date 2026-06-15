@@ -1,11 +1,19 @@
 import mammoth from 'mammoth';
-import * as XLSX from 'xlsx';
+import ExcelJS from 'exceljs';
 import type { UIMessage } from 'ai';
 
 // 附件预处理：图片/PDF 是 Opus 4.8 原生支持（原样传）；docx/xlsx 模型不能直接读，
 // 在服务端提取成文字（docx 还提取内嵌图）后注入消息，让大脑能识别。
+// xlsx 解析用 ExcelJS（活跃维护、无已知 high CVE）——曾用的 `xlsx`(SheetJS npm 版) 有原型污染 + ReDoS 高危且官方不再修。
 const DOCX = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 const XLSX_MT = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+
+// 上传门限（防内存爆 / 模型上下文爆 / ReDoS 路径不可达）。正常文档远低于这些值。
+const MAX_ATTACH_BYTES = 20 * 1024 * 1024; // 单个待解析附件 20MB 上限
+const MAX_TEXT_CHARS = 200_000; // 单附件提取文本上限（约束注入上下文的体量）
+const MAX_SHEETS = 30; // 最多解析的工作表数
+const MAX_ROWS_PER_SHEET = 5000; // 每个工作表最多解析行数
+const MAX_EMBEDDED_IMAGES = 24; // docx 最多提取的内嵌图数
 
 type AnyPart = { type?: string; mediaType?: string; url?: string; filename?: string; text?: string };
 
@@ -15,17 +23,24 @@ function dataUrlToBuffer(url: string): Buffer | null {
   return Buffer.from(url.slice(i + 7), 'base64');
 }
 
+const mb = (n: number) => (n / (1024 * 1024)).toFixed(1);
+
 async function extractDocx(buf: Buffer, name: string): Promise<AnyPart[]> {
   const out: AnyPart[] = [];
   const images: AnyPart[] = [];
-  const { value: text } = await mammoth.extractRawText({ buffer: buf });
+  const { value: raw } = await mammoth.extractRawText({ buffer: buf });
+  let text = raw.trim();
+  const textTrunc = text.length > MAX_TEXT_CHARS;
+  if (textTrunc) text = text.slice(0, MAX_TEXT_CHARS);
   try {
     await mammoth.convertToHtml(
       { buffer: buf },
       {
         convertImage: mammoth.images.imgElement(async (image) => {
-          const b64 = await image.read('base64');
-          images.push({ type: 'file', mediaType: image.contentType, url: `data:${image.contentType};base64,${b64}` });
+          if (images.length < MAX_EMBEDDED_IMAGES) {
+            const b64 = await image.read('base64');
+            images.push({ type: 'file', mediaType: image.contentType, url: `data:${image.contentType};base64,${b64}` });
+          }
           return { src: '' }; // 只收集图片，不需要 HTML 输出
         }),
       },
@@ -33,15 +48,58 @@ async function extractDocx(buf: Buffer, name: string): Promise<AnyPart[]> {
   } catch {
     /* 图片提取失败不致命 */
   }
-  out.push({ type: 'text', text: `【Word 文档「${name}」提取的文字】\n${text.trim() || '(无可提取文字)'}` });
-  if (images.length) out.push({ type: 'text', text: `【该文档含 ${images.length} 张内嵌图，已附在下方供识别】` }, ...images);
+  out.push({ type: 'text', text: `【Word 文档「${name}」提取的文字${textTrunc ? '，已按上限截断' : ''}】\n${text || '(无可提取文字)'}` });
+  if (images.length) out.push({ type: 'text', text: `【该文档含 ${images.length} 张内嵌图（上限 ${MAX_EMBEDDED_IMAGES}），已附在下方供识别】`, }, ...images);
   return out;
 }
 
-function extractXlsx(buf: Buffer, name: string): AnyPart[] {
-  const wb = XLSX.read(buf, { type: 'buffer' });
-  const body = wb.SheetNames.map((n) => `## 工作表：${n}\n${XLSX.utils.sheet_to_csv(wb.Sheets[n]).trim()}`).join('\n\n');
-  return [{ type: 'text', text: `【Excel「${name}」提取内容（CSV）】\n${body}` }];
+/** ExcelJS 单元格值 → 字符串（处理日期 / 超链接 / 富文本 / 公式结果 / 错误）。 */
+function cellToStr(v: unknown): string {
+  if (v == null) return '';
+  if (v instanceof Date) return v.toISOString().slice(0, 10);
+  if (typeof v === 'object') {
+    const o = v as Record<string, unknown>;
+    if (typeof o.text === 'string') return o.text; // hyperlink
+    if (Array.isArray(o.richText)) return (o.richText as Array<{ text?: string }>).map((t) => t.text ?? '').join('');
+    if (o.result != null) return String(o.result); // 公式结果
+    if (o.error != null) return String(o.error);
+    return '';
+  }
+  return String(v);
+}
+
+const csvCell = (s: string): string => (/[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s);
+
+async function extractXlsx(buf: Buffer, name: string): Promise<AnyPart[]> {
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.load(buf as unknown as ArrayBuffer);
+  const sheets = wb.worksheets;
+  const chunks: string[] = [];
+  let truncated = false;
+  for (const ws of sheets.slice(0, MAX_SHEETS)) {
+    const lines: string[] = [];
+    let n = 0;
+    ws.eachRow({ includeEmpty: false }, (row) => {
+      if (n >= MAX_ROWS_PER_SHEET) {
+        truncated = true;
+        return;
+      }
+      const vals = (row.values as unknown[]).slice(1).map((c) => csvCell(cellToStr(c))); // values[0] 是占位
+      lines.push(vals.join(','));
+      n++;
+    });
+    chunks.push(`## 工作表：${ws.name}\n${lines.join('\n')}`);
+  }
+  if (sheets.length > MAX_SHEETS) {
+    chunks.push(`（共 ${sheets.length} 个工作表，仅提取前 ${MAX_SHEETS} 个）`);
+    truncated = true;
+  }
+  let body = chunks.join('\n\n');
+  if (body.length > MAX_TEXT_CHARS) {
+    body = body.slice(0, MAX_TEXT_CHARS);
+    truncated = true;
+  }
+  return [{ type: 'text', text: `【Excel「${name}」提取内容（CSV）${truncated ? '，已按上限截断' : ''}】\n${body}` }];
 }
 
 export async function preprocessAttachments(messages: UIMessage[]): Promise<UIMessage[]> {
@@ -60,9 +118,13 @@ export async function preprocessAttachments(messages: UIMessage[]): Promise<UIMe
             newParts.push(part);
             continue;
           }
+          if (buf.length > MAX_ATTACH_BYTES) {
+            newParts.push({ type: 'text', text: `【附件「${part.filename}」约 ${mb(buf.length)}MB，超过 ${mb(MAX_ATTACH_BYTES)}MB 上限，未解析】` });
+            continue;
+          }
           try {
             newParts.push(
-              ...(isDocx ? await extractDocx(buf, part.filename ?? 'document.docx') : extractXlsx(buf, part.filename ?? 'sheet.xlsx')),
+              ...(isDocx ? await extractDocx(buf, part.filename ?? 'document.docx') : await extractXlsx(buf, part.filename ?? 'sheet.xlsx')),
             );
           } catch (e) {
             newParts.push({ type: 'text', text: `【附件「${part.filename}」解析失败：${e instanceof Error ? e.message : '未知错误'}】` });

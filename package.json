@@ -12,6 +12,7 @@
     "@ai-sdk/gateway": "^3.0.131",
     "@ai-sdk/react": "^3.0.207",
     "ai": "^6.0.205",
+    "exceljs": "^4.4.0",
     "konva": "^10.3.0",
     "mammoth": "^1.12.0",
     "next": "16.2.9",
@@ -22,7 +23,6 @@
     "react-markdown": "^10.1.0",
     "remark-gfm": "^4.0.1",
     "undici": "^8.4.1",
-    "xlsx": "^0.18.5",
     "zod": "^4.4.3"
   },
   "devDependencies": {

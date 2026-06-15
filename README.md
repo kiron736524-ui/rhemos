@@ -17,7 +17,7 @@
 ## 技术栈
 Next.js 16 + React 19 + TypeScript + **AI SDK 6** + **Vercel AI Gateway**（模型唯一来源）。UI：Tailwind 4 暗色 token + react-markdown（assistant 渲染）+ **react-konva**（2D 布局编辑器，`toDataURL` 截图喂生图）。
 脑 `anthropic/claude-opus-4.8` · 文生图 `openai/gpt-image-2` · **参考条件化 / 编辑 `google/gemini-3-pro-image`**（换角度 / 平面图条件化，一致性强）· 判图 `anthropic/claude-sonnet-4.6` · 语音清理 `deepseek/deepseek-v4-flash`（均经 Gateway）· ASR `fun-asr-realtime`（DashScope，唯一非 Gateway 例外）。
-docx/xlsx 上传服务端提取（mammoth / SheetJS）；图片/PDF Opus 4.8 原生识别。
+docx/xlsx 上传服务端提取（mammoth / **ExcelJS**，含大小/行数/文本上限防护）；图片/PDF Opus 4.8 原生识别。
 
 ## 快速开始
 ```bash

@@ -9,6 +9,7 @@ import { readProjectState } from '@/tools/read-project-state';
 import { reviseAsset } from '@/tools/revise-asset';
 import { taskComplete } from '@/tools/task-complete';
 import { updateSpec } from '@/tools/update-spec';
+import { updateBrief } from '@/tools/update-brief';
 import { renderMultiviewSheet } from '@/tools/render-multiview-sheet';
 import { generateViews } from '@/tools/generate-views';
 import { presentChoices } from '@/tools/present-choices';
@@ -19,6 +20,7 @@ export const tools = {
   read_project_state: readProjectState,
   present_choices: presentChoices,
   analyze_reference: analyzeReference,
+  update_brief: updateBrief,
   update_spec: updateSpec,
   generate_best_of_n: generateBestOfN,
   generate_views: generateViews,

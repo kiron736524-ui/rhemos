@@ -14,9 +14,10 @@
 | 加 / 改工具 | `src/tools/*.ts` → 注册在 `src/agent/orchestrator.ts` |
 | 循环退出 / 生图预算 | `src/agent/orchestrator.ts`（`stopWhen` / `imageBudget`）|
 | 判图逻辑（结构化打分）| `src/agent/inspect.ts` |
-| 存储 / 数据形状 / 项目列表 | `src/lib/storage.ts`（projectId-keyed + 写锁 + `listProjects`/`deleteProject`）+ `src/lib/types.ts` |
+| 存储 / 数据形状 / 项目列表 / 业务记忆 | `src/lib/storage.ts`（projectId-keyed + 写锁 + `listProjects`/`deleteProject` + `mergeBrief` 写 brief + 删除 tombstone 防复活）+ `src/lib/types.ts` |
 | API 入口 | `src/app/api/agent/route.ts`（tool 入参兜底 + 附件预处理）；图片读出 `assets/[id]`；项目列表/删除 `projects/` + `projects/[id]`；项目状态 `projects/[id]/state`；语音 `asr` |
-| 上传附件提取（docx→文字+内嵌图 / xlsx→CSV）| `src/lib/attachments.ts`（mammoth / SheetJS）|
+| 上传附件提取（docx→文字+内嵌图 / xlsx→CSV，含大小/行数/文本上限）| `src/lib/attachments.ts`（mammoth / ExcelJS）|
+| brief 业务记忆写入 | `src/tools/update-brief.ts` + `storage.mergeBrief`（澄清拍板后增量落事实）|
 | 语音输入 ASR | `src/lib/asr/{funasr,cleanup}.ts` + `src/components/VoiceInputButton.tsx` |
 | 前端工作台（三栏暗色科技）| `src/app/projects/[projectId]/page.tsx`（面板 / 对话 / 画廊 / 上传 / **卡片** / **markdown** / lightbox）；`src/app/page.tsx` 仅 redirect→default |
 | 卡片提问 / 选项卡 + 俯视草图 | `src/tools/present-choices.ts` + 前端 `ChoiceCards`/`FloorPlan`（page.tsx）|
@@ -52,6 +53,9 @@
 - **react-konva 要 `dynamic(ssr:false)`**（用 canvas，SSR 报错）；canvas 内对象不是 DOM，preview_click 点不到（要真鼠标）。
 - **dev 模式偶发跳 default**：新动态路由（`/projects/<新id>`）+ agent 长 SSE 流交织时整页 reload→根→redirect default。用左栏"新建项目"(SPA) 正常；对话已流式存盘不丢；**生产 build 无此问题**。
 - **生图画风锚**：`RENDER_STYLE_ANCHOR`+`withRenderStyle` 代码层强制注入工业渲染风，否则 gpt-image-2 漂向 CG/插画/示意图（尤其 turnaround sheet 措辞）。
+- **xlsx 解析用 ExcelJS、不用 SheetJS**：npm 上的 `xlsx`(SheetJS) 有原型污染 + ReDoS（high）且官方不再在 npm 修 → 换 ExcelJS。附件解析一律设上限（文件 20MB / 30 表 / 5000 行 / 24 内嵌图 / 20 万字），防内存与模型上下文被超大文件撑爆。
+- **删项目要防复活**：删除后可能仍有飞行中的生图 `saveAsset`，其 `mkdir` 会重建已删目录、`writeState` 把项目整个写回来 → `storage.ts` 用进程内 **tombstone** 拦截删除后的一切写盘（`writeState`/`saveAsset`/`saveConversation`）。这是数据正确性补丁，完整的长任务取消 / run 队列仍归 Phase 5。
+- **brief 是要主动写的**：`ProjectState.brief` 不会自己填——大脑须在澄清拍板后调 `update_brief` 增量落事实（`storage.mergeBrief`），否则 `read_project_state` 永远读到空 `{}`、跨轮记忆丢失、重复追问。
 
 ## 现状
 Phase 0-4 完成并实测，并经三轮重大升级：**UI 颠覆**（暗色工程制图科技，rhemax 黑红蓝）· **卡片提问 + 布局编辑器**（`present_choices` 可点卡片 + 俯视草图，零打字；react-konva `LayoutEditor` 拖拽精调 → 截图喂生图）· **工业级一致性**（identity 锁定 / 画风锚 / 进化式参考链 + 判图门控 / 平面图条件化生图，参考条件化用 Gemini 3 Pro Image）· **对话持久化**（流式存盘）。Phase 5（生产化：DB / auth / 成本核算 / 部署 / 长任务队列）未做，见 `engineering-plan.md`。

@@ -3,7 +3,7 @@
 import { useChat } from '@ai-sdk/react';
 import { getToolName, isToolUIPart, DefaultChatTransport } from 'ai';
 import { useParams, useRouter } from 'next/navigation';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import VoiceInputButton from '@/components/VoiceInputButton';
@@ -364,12 +364,15 @@ export default function Workbench() {
   const [input, setInput] = useState('');
   const [files, setFiles] = useState<File[]>([]);
   const [preview, setPreview] = useState<string | null>(null);
-  const [filePreviews, setFilePreviews] = useState<(string | null)[]>([]);
   const [editor, setEditor] = useState<{ footprint: { length: number; width: number }; modules: LayoutModule[]; openings?: string[] } | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const pidRef = useRef(projectId);
-  pidRef.current = projectId; // 每次渲染同步当前 projectId，供存盘防串项目校验
+  // 在 effect 里同步（不在 render 期间写 ref）：projectId 变更后下一次 commit 即更新 pidRef，
+  // 供延迟存盘回调校验"是否还在同一项目"，防止旧项目的存盘串写到新项目。
+  useEffect(() => {
+    pidRef.current = projectId;
+  }, [projectId]);
 
   const { messages, sendMessage, status, error, setMessages } = useChat({
     transport: new DefaultChatTransport({ api: '/api/agent', body: { projectId } }),
@@ -394,6 +397,10 @@ export default function Workbench() {
     }
   }, []);
 
+  // 下面三个是异步数据获取 effect：都是 fetch 完成后才 setState（非同步 cascading render）。
+  // 项目未引入 SWR/React Query，effect 是观察 projectId / useChat status 变化并拉取的唯一时机——
+  // set-state-in-effect 规则针对的是"本可在 render 派生的同步 setState"，此处不适用，故对这一段豁免。
+  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     void refreshProjects();
   }, [refreshProjects]);
@@ -406,12 +413,14 @@ export default function Workbench() {
       void refreshProjects();
     }
   }, [status, refreshState, refreshProjects]);
-  // 为待发送的图片附件生成本地预览 URL；files 变化时重建并清理旧的，避免内存泄漏
-  useEffect(() => {
-    const urls = files.map((f) => (f.type.startsWith('image/') ? URL.createObjectURL(f) : null));
-    setFilePreviews(urls);
-    return () => urls.forEach((u) => u && URL.revokeObjectURL(u));
-  }, [files]);
+  /* eslint-enable react-hooks/set-state-in-effect */
+  // 待发送图片附件的本地预览 URL：用 useMemo 派生（不在 effect 里 setState），
+  // 单独的 cleanup effect 在 files 变化 / 组件卸载时 revoke 上一批，避免内存泄漏。
+  const filePreviews = useMemo(
+    () => files.map((f) => (f.type.startsWith('image/') ? URL.createObjectURL(f) : null)),
+    [files],
+  );
+  useEffect(() => () => filePreviews.forEach((u) => u && URL.revokeObjectURL(u)), [filePreviews]);
   // 切换 / 重载项目：先清空（避免串项目残留），再拉取该项目的对话历史恢复 messages
   useEffect(() => {
     let cancelled = false;
