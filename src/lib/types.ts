@@ -35,3 +35,12 @@ export interface ProjectState {
   assets: Asset[];
   updatedAt: string;
 }
+
+/** 项目列表卡片摘要（左侧项目面板用）。 */
+export interface ProjectSummary {
+  id: string;
+  title: string; // spec.narrative 首句，缺省时为占位名
+  assetCount: number;
+  updatedAt: string;
+  thumbnailUrl?: string; // 最新资产缩略
+}

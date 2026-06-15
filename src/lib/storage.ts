@@ -1,7 +1,7 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
-import type { Asset, DesignSpec, InspectionResult, ProjectState } from './types';
+import type { Asset, DesignSpec, InspectionResult, ProjectState, ProjectSummary } from './types';
 
 // 本地文件系统存储（Phase 4：projectId-keyed 隔离 + per-project 写锁；DB/Blob 留 Phase 5）。
 const ROOT = path.join(process.cwd(), '.data', 'projects');
@@ -95,4 +95,45 @@ export function addInspection(id: string, assetId: string, insp: InspectionResul
 
 export async function loadAssetBytes(id: string, assetId: string): Promise<Uint8Array> {
   return new Uint8Array(await readFile(path.join(assetsDir(id), `${assetId}.png`)));
+}
+
+/** 项目卡片标题：优先 spec.narrative 首句，否则占位名。 */
+function projectTitle(s: ProjectState): string {
+  const n = s.spec?.narrative?.trim();
+  if (n) {
+    const first = n.split(/[\n。.!！?？]/)[0].trim();
+    if (first) return first.length > 24 ? `${first.slice(0, 24)}…` : first;
+  }
+  return s.id === DEFAULT_PROJECT ? '默认项目' : '未命名项目';
+}
+
+/** 列出所有项目（最近更新在前），供左侧项目面板。损坏目录跳过。 */
+export async function listProjects(): Promise<ProjectSummary[]> {
+  if (!existsSync(ROOT)) return [];
+  const dirs = await readdir(ROOT, { withFileTypes: true });
+  const out: ProjectSummary[] = [];
+  for (const d of dirs) {
+    if (!d.isDirectory() || !existsSync(statePath(d.name))) continue;
+    try {
+      const s = await readState(d.name);
+      out.push({
+        id: s.id,
+        title: projectTitle(s),
+        assetCount: s.assets.length,
+        updatedAt: s.updatedAt,
+        thumbnailUrl: s.assets[s.assets.length - 1]?.url,
+      });
+    } catch {
+      /* 跳过解析失败的项目 */
+    }
+  }
+  return out.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+}
+
+/** 删除项目（default 保护不删）。 */
+export async function deleteProject(id: string): Promise<void> {
+  if (id === DEFAULT_PROJECT) return;
+  await withLock(id, async () => {
+    await rm(projDir(id), { recursive: true, force: true });
+  });
 }
