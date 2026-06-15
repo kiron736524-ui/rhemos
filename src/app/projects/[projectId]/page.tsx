@@ -80,6 +80,7 @@ export default function Workbench() {
   const [input, setInput] = useState('');
   const [files, setFiles] = useState<File[]>([]);
   const [preview, setPreview] = useState<string | null>(null);
+  const [filePreviews, setFilePreviews] = useState<(string | null)[]>([]);
 
   const { messages, sendMessage, status, error } = useChat({
     transport: new DefaultChatTransport({ api: '/api/agent', body: { projectId } }),
@@ -116,6 +117,12 @@ export default function Workbench() {
       void refreshProjects();
     }
   }, [status, refreshState, refreshProjects]);
+  // 为待发送的图片附件生成本地预览 URL（缩略图 / 悬浮 / 放大用）；files 变化时重建并清理旧的，避免内存泄漏
+  useEffect(() => {
+    const urls = files.map((f) => (f.type.startsWith('image/') ? URL.createObjectURL(f) : null));
+    setFilePreviews(urls);
+    return () => urls.forEach((u) => u && URL.revokeObjectURL(u));
+  }, [files]);
 
   const send = (text: string) => {
     if ((!text.trim() && files.length === 0) || busy) return;
@@ -294,15 +301,47 @@ export default function Workbench() {
           className="border-t border-neutral-200 p-3"
         >
           {files.length > 0 && (
-            <div className="mb-2 flex flex-wrap gap-1.5">
-              {files.map((f, i) => (
-                <span key={i} className="flex items-center gap-1 rounded bg-neutral-100 px-2 py-0.5 text-[11px] text-neutral-600">
-                  📎 {f.name}
-                  <button type="button" onClick={() => setFiles(files.filter((_, j) => j !== i))} className="text-neutral-400 hover:text-neutral-700">
-                    ×
-                  </button>
-                </span>
-              ))}
+            <div className="mb-2 flex flex-wrap gap-2">
+              {files.map((f, i) => {
+                const url = filePreviews[i];
+                const ext = (f.name.split('.').pop() || 'file').toUpperCase();
+                return (
+                  <div key={i} className="group relative">
+                    {url ? (
+                      <>
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={url}
+                          alt={f.name}
+                          onClick={() => setPreview(url)}
+                          className="h-14 w-14 cursor-zoom-in rounded-md border border-neutral-200 object-cover"
+                          title="点击放大"
+                        />
+                        {/* 悬浮预览：hover 时浮在缩略图上方 */}
+                        <div className="pointer-events-none absolute bottom-full left-0 z-30 mb-2 hidden group-hover:block">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img src={url} alt="" className="max-h-64 max-w-xs rounded-lg border border-neutral-200 bg-white shadow-xl" />
+                        </div>
+                      </>
+                    ) : (
+                      <div className="flex h-14 w-44 items-center gap-2 rounded-md border border-neutral-200 bg-white px-2" title={f.name}>
+                        <div className="grid h-9 w-9 shrink-0 place-items-center rounded bg-neutral-100 text-[9px] font-bold text-neutral-500">
+                          {ext.slice(0, 4)}
+                        </div>
+                        <span className="truncate text-xs text-neutral-600">{f.name}</span>
+                      </div>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => setFiles(files.filter((_, j) => j !== i))}
+                      title="移除"
+                      className="absolute -right-1.5 -top-1.5 z-10 hidden h-4 w-4 items-center justify-center rounded-full bg-neutral-700 text-[10px] leading-none text-white group-hover:flex"
+                    >
+                      ×
+                    </button>
+                  </div>
+                );
+              })}
             </div>
           )}
           <div className="flex items-center gap-2">
