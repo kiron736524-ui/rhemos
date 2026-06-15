@@ -315,8 +315,12 @@ export default function Workbench() {
               accept="image/*,.pdf,.docx,.xlsx,.xls"
               className="sr-only"
               onChange={(e) => {
-                if (e.target.files) setFiles((cur) => [...cur, ...Array.from(e.target.files!)]);
-                e.target.value = '';
+                // 必须先同步读出文件再清空：setFiles 的 updater 是延迟执行的闭包，
+                // 若在其中读 e.target.files，会读到被下一行 value='' 清空后的空列表
+                // （经典 React 事件陷阱）——表现为"选了文件却毫无反应"。
+                const picked = Array.from(e.target.files ?? []);
+                e.target.value = ''; // 允许重复选同一文件
+                if (picked.length) setFiles((cur) => [...cur, ...picked]);
               }}
             />
             <label
