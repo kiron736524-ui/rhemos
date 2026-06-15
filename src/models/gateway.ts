@@ -12,6 +12,8 @@ export const MODEL_IDS = {
   image: 'openai/gpt-image-2',
   /** 高频视觉自检默认档（Phase 0 判图基准测试后最终确定，见 INSPECT_CANDIDATES） */
   inspect: 'anthropic/claude-sonnet-4.6',
+  /** 语音转写后的清理整理（去语气词/去重复/轻度理顺）—— efficiency 档，便宜快 */
+  cleanup: 'deepseek/deepseek-v4-flash',
 } as const;
 
 /**

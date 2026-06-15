@@ -3,6 +3,7 @@
 import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport, getToolName, isToolUIPart } from 'ai';
 import { useState } from 'react';
+import VoiceInputButton from '@/components/VoiceInputButton';
 
 type ToolPartLike = { state?: string; input?: unknown; output?: unknown };
 
@@ -124,6 +125,10 @@ export default function Home() {
           onChange={(e) => setInput(e.target.value)}
           placeholder="描述你的展台需求…"
           className="flex-1 rounded-md border border-neutral-300 px-3 py-2 text-sm outline-none focus:border-neutral-500"
+        />
+        <VoiceInputButton
+          disabled={busy}
+          onTranscribed={(t) => setInput((cur) => (cur.trim() ? `${cur.trim()} ${t}` : t))}
         />
         <button
           type="submit"
