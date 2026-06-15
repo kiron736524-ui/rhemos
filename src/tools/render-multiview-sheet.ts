@@ -1,6 +1,6 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { MAX_PARALLEL_IMAGES, MODEL_IDS, openaiViaGateway } from '@/models/gateway';
+import { MAX_PARALLEL_IMAGES, MODEL_IDS, openaiViaGateway, withRenderStyle } from '@/models/gateway';
 import { addInspection, loadAssetBytes, projectIdFromContext, saveAsset } from '@/lib/storage';
 import { inspectSheet, sheetToInspectionResult } from '@/agent/inspect';
 
@@ -9,7 +9,7 @@ const sheetPrompt = (booth: string) => `A single turnaround sheet image, 2x2 gri
 - top-right: pure LEFT side view (camera fully to the left, clearly different from the front)
 - bottom-left: pure RIGHT side view (camera fully to the right)
 - bottom-right: TOP-DOWN orthographic floor plan (true bird's-eye layout)
-Each panel must be a DISTINCTLY different camera — do not repeat the same angle. Clean panel labels, neutral background, photorealistic.
+Each panel must be a DISTINCTLY different camera — do not repeat the same angle. Thin clean panel labels on a neutral dark background. CRITICAL: every one of the four panels is a FULLY RENDERED photorealistic 3D view (only the camera angle differs between panels) — none of them may be a line drawing, wireframe, flat icon or schematic diagram; even the bottom-right top-down floor plan must be a realistically rendered orthographic top view, not a 2D line diagram.
 
 The booth:
 ${booth}`;
@@ -32,10 +32,11 @@ export const renderMultiviewSheet = tool({
   execute: async ({ booth, n, quality, size }, opts) => {
     const pid = projectIdFromContext((opts as { experimental_context?: unknown }).experimental_context);
     const client = openaiViaGateway();
+    console.log(`[render_multiview_sheet] n=${n} quality=${quality} size=${size}`);
     const prompt = sheetPrompt(booth);
     const batches = await Promise.all(
       Array.from({ length: n }, async () => {
-        const r = await client.images.generate({ model: MODEL_IDS.image, prompt, size, quality, n: 1 });
+        const r = await client.images.generate({ model: MODEL_IDS.image, prompt: withRenderStyle(prompt), size, quality, n: 1 });
         const b64 = r.data?.[0]?.b64_json ?? '';
         return b64 ? new Uint8Array(Buffer.from(b64, 'base64')) : null;
       }),

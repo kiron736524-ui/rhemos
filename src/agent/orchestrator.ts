@@ -10,13 +10,19 @@ import { reviseAsset } from '@/tools/revise-asset';
 import { taskComplete } from '@/tools/task-complete';
 import { updateSpec } from '@/tools/update-spec';
 import { renderMultiviewSheet } from '@/tools/render-multiview-sheet';
+import { generateViews } from '@/tools/generate-views';
+import { presentChoices } from '@/tools/present-choices';
+import { renderFromPlan } from '@/tools/render-from-plan';
 
 // 工具注册表（名字即大脑看到的工具名）
 export const tools = {
   read_project_state: readProjectState,
+  present_choices: presentChoices,
   analyze_reference: analyzeReference,
   update_spec: updateSpec,
   generate_best_of_n: generateBestOfN,
+  generate_views: generateViews,
+  render_from_plan: renderFromPlan,
   render_multiview_sheet: renderMultiviewSheet,
   inspect_result: inspectResult,
   revise_asset: reviseAsset,
@@ -29,8 +35,12 @@ function imageBudget(maxImages: number): StopCondition<typeof tools> {
     let imgs = 0;
     for (const s of steps) {
       for (const c of s.toolCalls ?? []) {
+        const ci = (c as { input?: { n?: number; views?: unknown[] } }).input;
         if (c.toolName === 'generate_best_of_n' || c.toolName === 'render_multiview_sheet') {
-          imgs += (c as { input?: { n?: number } }).input?.n ?? 1;
+          imgs += ci?.n ?? 1;
+        } else if (c.toolName === 'generate_views' || c.toolName === 'render_from_plan') {
+          // 进化链：主图 + 每个视角各 n 张
+          imgs += (ci?.n ?? 2) * (1 + (ci?.views?.length ?? 3));
         } else if (c.toolName === 'revise_asset') {
           imgs += 1;
         }
@@ -49,6 +59,6 @@ export async function orchestratorConfig() {
     model: gateway.languageModel(MODEL_IDS.brain),
     system: await buildSystemPrompt(),
     tools,
-    stopWhen: [hasToolCall('task_complete'), imageBudget(5), stepCountIs(16)],
+    stopWhen: [hasToolCall('task_complete'), imageBudget(16), stepCountIs(16)],
   };
 }

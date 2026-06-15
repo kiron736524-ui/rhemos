@@ -31,6 +31,52 @@ export async function inspectImage(bytes: Uint8Array, criteria: string, modelId?
   return object;
 }
 
+// 参考图 vs 候选图一致性判图（进化链门控用）：判"换角度后是否还是同一个展台"。
+export const consistencySchema = z.object({
+  consistencyScore: z.number().min(0).max(100).describe('候选图与参考图是同一个展台的程度 0-100（结构/部件/材质/颜色/品牌/布局）'),
+  sameBooth: z.boolean().describe('是否同一展台'),
+  angleChanged: z.boolean().describe('视角是否真的变化（不是复制参考）'),
+  drift: z.array(z.string()).describe('漂移 / 不一致的部件（每条具体）'),
+});
+export type ConsistencyCheck = z.infer<typeof consistencySchema>;
+
+export async function inspectConsistency(
+  refBytes: Uint8Array,
+  candidateBytes: Uint8Array,
+  viewDesc: string,
+  modelId?: string,
+): Promise<ConsistencyCheck> {
+  const { object } = await generateObject({
+    model: inspector(modelId),
+    schema: consistencySchema,
+    messages: [
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'text',
+            text: `第1张是已确认的展台参考图，第2张应是同一展台的「${viewDesc}」。客观判断：consistencyScore=两张是同一个展台的程度(结构/部件含数量/材质/颜色/品牌/布局) 0-100；sameBooth；angleChanged=视角是否真的变了；drift=漂移或不一致的部件。只看客观。`,
+          },
+          { type: 'image', image: refBytes },
+          { type: 'image', image: candidateBytes },
+        ],
+      },
+    ],
+  });
+  return object;
+}
+
+export function consistencyToInspectionResult(c: ConsistencyCheck, view: string, gate: number, model: string): InspectionResult {
+  return {
+    pass: c.sameBooth && c.consistencyScore >= gate,
+    score: c.consistencyScore,
+    fails: c.drift,
+    summary: c.consistencyScore >= gate && c.sameBooth ? `一致视角：${view}` : `疑似漂移：${view}`,
+    model,
+    at: new Date().toISOString(),
+  };
+}
+
 // 多视图 sheet 专用判图：看一张四宫格里"是否同一展台 + 角度是否真的分明"。
 export const sheetInspectionSchema = z.object({
   consistencyScore: z.number().min(0).max(100).describe('四格是否同一展台 0-100'),

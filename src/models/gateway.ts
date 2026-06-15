@@ -1,4 +1,5 @@
 import { gateway } from '@ai-sdk/gateway';
+import { generateText } from 'ai';
 import OpenAI from 'openai';
 
 /**
@@ -12,6 +13,8 @@ export const MODEL_IDS = {
   image: 'openai/gpt-image-2',
   /** 高频视觉自检默认档（Phase 0 判图基准测试后最终确定，见 INSPECT_CANDIDATES） */
   inspect: 'anthropic/claude-sonnet-4.6',
+  /** 参考图条件化生图 / 局部编辑（多模态图像模型，一致性标杆）——换角度、"保持其余不变只改X" */
+  imageEdit: 'google/gemini-3-pro-image',
   /** 语音转写后的清理整理（去语气词/去重复/轻度理顺）—— efficiency 档，便宜快 */
   cleanup: 'deepseek/deepseek-v4-flash',
 } as const;
@@ -48,3 +51,29 @@ export const openaiViaGateway = () =>
 
 /** best-of-N 并发上限（成本控制；Phase 2 best-of-N 用） */
 export const MAX_PARALLEL_IMAGES = 2;
+
+/**
+ * 工业级渲染画风锚 —— 代码层强制注入所有生图 prompt（不依赖大脑每次记得写）。
+ * gpt-image-2 缺强画风约束时会漂向 CG/插画/产品手册示意图；尤其 turnaround sheet 的
+ * "2x2 grid / panel / turnaround" 等措辞天然带向 model-sheet 示意图风（用户实测"诡异、不像正经渲染"的来源）。
+ * 这段把它钉死在"专业建筑可视化级真实渲染"，并显式否定卡通/插画/平面图/草模。
+ */
+export const RENDER_STYLE_ANCHOR =
+  'RENDER STYLE (mandatory, highest priority): photorealistic professional architectural visualization of a REAL exhibition booth — high-end 3D render with V-Ray / Corona / Octane-grade physically-based global illumination, realistic soft shadows and contact occlusion, accurate reflections on glossy floors and on brushed-metal / glass / powder-coated surfaces, true-to-life LED-screen and spotlight glow, crisp clean build-ready geometry, neutral photographic color grading, as if photographed in a real exhibition hall. It MUST look like a photograph of a real fabricated booth or a top-tier exhibition-design studio render — absolutely NOT a cartoon, NOT an illustration, NOT a flat vector or line diagram, NOT a sketch, NOT a clay/toy model, NOT a generic glossy AI-art look.';
+
+/** 把画风锚追加到任意生图 prompt 末尾（代码层强制兜底）。 */
+export const withRenderStyle = (prompt: string): string => `${prompt}\n\n${RENDER_STYLE_ANCHOR}`;
+
+/**
+ * 参考图条件化生图（Gemini 3 Pro Image）：把一张或多张参考图 + 文字指令一起喂给多模态图像模型，
+ * 让它"看着这个展台"换角度 / 局部编辑，保持与参考一致。多图参考 = 更强的身份锁定（进化链）。
+ * 失败（无图返回 / 报错由调用方 catch）时返回 null。
+ */
+export async function generateImageFromRefs(refs: Uint8Array[], instruction: string): Promise<Uint8Array | null> {
+  const r = await generateText({
+    model: gateway.languageModel(MODEL_IDS.imageEdit),
+    messages: [{ role: 'user', content: [{ type: 'text', text: instruction }, ...refs.map((image) => ({ type: 'image' as const, image }))] }],
+  });
+  const f = (r.files ?? []).find((x) => x.mediaType?.startsWith('image/'));
+  return f ? new Uint8Array(f.uint8Array) : null;
+}

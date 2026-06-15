@@ -20,9 +20,10 @@ export interface Asset {
   inspections?: InspectionResult[];
 }
 
-/** 成熟方案：一物三用——给用户看的方案 / 跨视图不变量 / 判图基准 */
+/** 成熟方案：一物多用——给用户看的方案 / 身份锁定 / 跨视图不变量 / 判图基准 */
 export interface DesignSpec {
   narrative: string; // 给用户看的中文方案
+  identity?: string; // 身份锁定串（基础信息 schema 的文字版）：尺寸/开口/各功能区位置/部件含数量/形状/材质/配色 hex/品牌占位——跨视图 + 跨次生成的一致性锚，每次生图强制前置
   invariants: string[]; // 跨视图不可变量（多视图一致性用）
   selfCheckCriteria: string; // 供 inspect 的客观判图要点（"输出 vs spec"）
   updatedAt: string;

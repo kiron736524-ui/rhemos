@@ -1,6 +1,6 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { MAX_PARALLEL_IMAGES, MODEL_IDS, openaiViaGateway } from '@/models/gateway';
+import { MAX_PARALLEL_IMAGES, MODEL_IDS, openaiViaGateway, withRenderStyle } from '@/models/gateway';
 import { addInspection, loadAssetBytes, projectIdFromContext, saveAsset } from '@/lib/storage';
 import { inspectImage, toInspectionResult } from '@/agent/inspect';
 
@@ -17,10 +17,11 @@ export const generateBestOfN = tool({
   execute: async ({ prompt, n, quality, size, criteria }, opts) => {
     const pid = projectIdFromContext((opts as { experimental_context?: unknown }).experimental_context);
     const client = openaiViaGateway();
+    console.log(`[generate_best_of_n] n=${n} quality=${quality} size=${size}`);
     // 1) 并行生成 N 张（慢，横向）
     const batches = await Promise.all(
       Array.from({ length: n }, async () => {
-        const r = await client.images.generate({ model: MODEL_IDS.image, prompt, size, quality, n: 1 });
+        const r = await client.images.generate({ model: MODEL_IDS.image, prompt: withRenderStyle(prompt), size, quality, n: 1 });
         const b64 = r.data?.[0]?.b64_json ?? '';
         return b64 ? new Uint8Array(Buffer.from(b64, 'base64')) : null;
       }),

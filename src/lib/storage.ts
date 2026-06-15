@@ -137,3 +137,25 @@ export async function deleteProject(id: string): Promise<void> {
     await rm(projDir(id), { recursive: true, force: true });
   });
 }
+
+// ── 对话历史持久化（Phase 4 补：useChat messages 原本只在内存，切项目即丢）──
+// 存 UIMessage[]（图片是 /api/assets URL、体积小）。结构松散用 unknown[]，类型归前端。
+const conversationPath = (id: string) => path.join(projDir(id), 'conversation.json');
+
+export async function loadConversation(id: string = DEFAULT_PROJECT): Promise<unknown[]> {
+  const p = conversationPath(id);
+  if (!existsSync(p)) return [];
+  try {
+    const parsed = JSON.parse(await readFile(p, 'utf8'));
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveConversation(id: string, messages: unknown[]): Promise<void> {
+  return withLock(id, async () => {
+    await mkdir(projDir(id), { recursive: true });
+    await writeFile(conversationPath(id), JSON.stringify(messages), 'utf8');
+  });
+}
