@@ -1,7 +1,7 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { MODEL_IDS, withRenderStyle, generateImageFromRefs } from '@/models/gateway';
-import { addInspection, loadAssetBytes, projectIdFromContext, readState, saveAsset } from '@/lib/storage';
+import { addInspection, loadAssetBytes, projectIdFromContext, readState, recordRunDeliverable, runIdFromContext, saveAsset } from '@/lib/storage';
 import { inspectImage, toInspectionResult } from '@/agent/inspect';
 import { writeImagePrompt } from '@/agent/prompt-writer';
 import type { Deliverable } from '@/lib/types';
@@ -14,7 +14,9 @@ export const reviseAsset = tool({
     fix: z.string().describe('要修正的局部（**中文**，只说"改什么"，如"洽谈区只留一张圆桌配 4 把白椅，删掉多出来的椅子和第二张桌子"）'),
   }),
   execute: async ({ parentAssetId, fix }, opts) => {
-    const pid = projectIdFromContext((opts as { experimental_context?: unknown }).experimental_context);
+    const ctx = (opts as { experimental_context?: unknown }).experimental_context;
+    const pid = projectIdFromContext(ctx);
+    const runId = runIdFromContext(ctx);
     const parentBytes = await loadAssetBytes(pid, parentAssetId).catch(() => null);
     if (!parentBytes) return { error: `找不到原资产 ${parentAssetId}` };
     const s = await readState(pid);
@@ -34,6 +36,7 @@ export const reviseAsset = tool({
       recommendedId: asset.id,
       ...(insp.fails.length ? { issues: insp.fails } : {}),
     };
+    await recordRunDeliverable(pid, runId, deliverable);
     return deliverable;
   },
 });

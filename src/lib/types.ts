@@ -1,5 +1,18 @@
 export type AssetKind = 'booth-image' | 'multiview' | 'reference';
 
+export type AttachmentKind = 'image' | 'pdf' | 'docx' | 'xlsx' | 'file';
+
+export interface Attachment {
+  id: string;
+  kind: AttachmentKind;
+  filename: string;
+  mediaType: string;
+  size: number;
+  path: string;
+  url: string;
+  createdAt: string;
+}
+
 export interface InspectionResult {
   pass: boolean;
   score?: number;
@@ -29,11 +42,87 @@ export interface DesignSpec {
   updatedAt: string;
 }
 
+export type LayoutZoneType = 'led' | 'stage' | 'brand' | 'reception' | 'meeting' | 'storage' | 'product' | 'plant' | 'aisle';
+export type LayoutOpening = 'front' | 'back' | 'left' | 'right';
+
+export interface BoothLayoutZone {
+  name: string;
+  type?: LayoutZoneType;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  note?: string;
+}
+
+export interface BoothLayout {
+  length: number;
+  width: number;
+  openings?: LayoutOpening[];
+  facing?: string;
+  zones: BoothLayoutZone[];
+}
+
+export type LayoutDecisionStatus = 'pending' | 'confirmed' | 'skipped';
+
+export interface LayoutDecision {
+  status: LayoutDecisionStatus;
+  proposal?: BoothLayout;
+  planAssetId?: string;
+  updatedAt: string;
+}
+
+export type RunStatus = 'running' | 'completed' | 'failed' | 'aborted';
+
+export interface RunBudget {
+  imageLimit: number;
+  requestedImages?: number;
+  actualImages?: number;
+}
+
+export interface RunEvent {
+  at: string;
+  type: 'step' | 'tool' | 'deliverable' | 'status';
+  stepNumber?: number;
+  toolName?: string;
+  input?: unknown;
+  outputSummary?: unknown;
+  message?: string;
+}
+
+export interface RunRecord {
+  id: string;
+  projectId: string;
+  status: RunStatus;
+  startedAt: string;
+  updatedAt: string;
+  completedAt?: string;
+  budget: RunBudget;
+  totalUsage?: unknown;
+  delivered?: string[];
+  deliverable?: Deliverable;
+  error?: string;
+  events: RunEvent[];
+}
+
+export interface RunSummary {
+  id: string;
+  status: RunStatus;
+  startedAt: string;
+  completedAt?: string;
+  budget: RunBudget;
+  delivered?: string[];
+  error?: string;
+}
+
 export interface ProjectState {
   id: string;
   brief: Record<string, unknown>; // Phase 1 用自由记录；强类型 BoothBrief 后续替换
   spec?: DesignSpec;
+  layout?: LayoutDecision;
   assets: Asset[];
+  attachments?: Attachment[];
+  runs?: RunSummary[];
   updatedAt: string;
 }
 

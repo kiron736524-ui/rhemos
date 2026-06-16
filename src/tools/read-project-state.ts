@@ -15,7 +15,10 @@ export const readProjectState = tool({
       projectId: pid,
       brief: s.brief,
       spec: s.spec ?? null,
+      layout: s.layout ?? null,
       assetCount: s.assets.length,
+      attachmentCount: s.attachments?.length ?? 0,
+      recentRuns: (s.runs ?? []).slice(0, 5),
       // 瘦身（D26）：不回传长 prompt 与全部判图史，只给最近一次判图摘要，抗大脑上下文膨胀。
       assets: s.assets.map((a) => {
         const last = a.inspections?.[a.inspections.length - 1];

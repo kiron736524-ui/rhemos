@@ -1,7 +1,7 @@
 'use client';
 
 import { useChat } from '@ai-sdk/react';
-import { getToolName, isToolUIPart, DefaultChatTransport } from 'ai';
+import { getToolName, isToolUIPart, DefaultChatTransport, type FileUIPart } from 'ai';
 import { useParams, useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown, { type Components } from 'react-markdown';
@@ -450,6 +450,7 @@ export default function Workbench() {
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [input, setInput] = useState('');
   const [files, setFiles] = useState<File[]>([]);
+  const [uploading, setUploading] = useState(false);
   const [preview, setPreview] = useState<string | null>(null);
   const [editor, setEditor] = useState<{ footprint: { length: number; width: number }; modules: LayoutModule[]; openings?: string[] } | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -464,7 +465,7 @@ export default function Workbench() {
   const { messages, sendMessage, status, error, setMessages } = useChat({
     transport: new DefaultChatTransport({ api: '/api/agent', body: { projectId } }),
   });
-  const busy = status === 'submitted' || status === 'streaming';
+  const busy = status === 'submitted' || status === 'streaming' || uploading;
 
   const refreshState = useCallback(async () => {
     try {
@@ -548,13 +549,30 @@ export default function Workbench() {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
   }, [messages, busy]);
 
-  const send = (text: string) => {
+  const uploadFiles = async (pending: File[]): Promise<FileUIPart[]> => {
+    if (!pending.length) return [];
+    const fd = new FormData();
+    pending.forEach((f) => fd.append('files', f));
+    const r = await fetch(`/api/projects/${projectId}/attachments`, { method: 'POST', body: fd });
+    if (!r.ok) throw new Error('attachment upload failed');
+    const d = (await r.json()) as { files?: FileUIPart[] };
+    return d.files ?? [];
+  };
+
+  const send = async (text: string) => {
     if ((!text.trim() && files.length === 0) || busy) return;
-    const dt = new DataTransfer();
-    files.forEach((f) => dt.items.add(f));
-    sendMessage({ text: text.trim() || '（请看附件）', files: dt.files });
-    setInput('');
-    setFiles([]);
+    const pending = files;
+    setUploading(true);
+    try {
+      const uploaded = await uploadFiles(pending);
+      void sendMessage({ text: text.trim() || '（请看附件）', files: uploaded }).catch(() => alert('发送失败，请稍后重试。'));
+      setInput('');
+      setFiles([]);
+    } catch {
+      alert('附件上传失败，请稍后重试。');
+    } finally {
+      setUploading(false);
+    }
   };
 
   // 打开布局编辑器，预填所选方案的布局（present_choices 的 layout → 可编辑模块）
@@ -575,7 +593,7 @@ export default function Workbench() {
         body: JSON.stringify({ png: dataUrl }),
       });
       const d = (await r.json()) as { assetId?: string };
-      if (d.assetId) send(`已用布局编辑器定稿平面图（参考资产 ${d.assetId}）。请用 render（planAssetId=该参考资产）按这张平面图的布局出 3D 效果图全套。`);
+      if (d.assetId) void send(`已用布局编辑器定稿平面图（参考资产 ${d.assetId}）。请用 render（planAssetId=该参考资产）按这张平面图的布局出 3D 效果图全套。`);
     } catch {
       /* ignore */
     }
@@ -583,7 +601,13 @@ export default function Workbench() {
   // 跳过精调：关编辑器 + 让大脑按原方案布局直接出图
   const handleEditorSkip = () => {
     setEditor(null);
-    send('不精调了，按原方案的布局直接出图。请调用 render 给中文意图出 3D 效果图全套。');
+    void fetch(`/api/projects/${projectId}/layout`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ decision: 'skipped' }),
+    }).finally(() => {
+      void send('不精调了，按原方案的布局直接出图。请调用 render 给中文意图出 3D 效果图全套。');
+    });
   };
 
   const deleteProj = async (id: string) => {
@@ -778,7 +802,7 @@ export default function Workbench() {
                       if (isToolUIPart(part) && getToolName(part) === 'present_choices') {
                         const tp = part as unknown as ToolPartLike;
                         if (tp.state === 'output-available' && tp.output) {
-                          return <ChoiceCards key={i} data={tp.output as ChoiceData} onSubmit={(t) => send(t)} busy={busy} />;
+                          return <ChoiceCards key={i} data={tp.output as ChoiceData} onSubmit={(t) => void send(t)} busy={busy} />;
                         }
                         return null;
                       }
@@ -913,7 +937,7 @@ export default function Workbench() {
                   // Enter 发送；Shift+Enter 换行；输入法组字中不误发
                   if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
                     e.preventDefault();
-                    send(input);
+                    void send(input);
                   }
                 }}
                 rows={1}
@@ -947,7 +971,7 @@ export default function Workbench() {
                 <span className="mono-tag ml-auto hidden text-ink-600 sm:block">Enter 发送 · Shift+Enter 换行</span>
                 <button
                   type="button"
-                  onClick={() => send(input)}
+                  onClick={() => void send(input)}
                   disabled={busy || (!input.trim() && files.length === 0)}
                   className="u-press flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-accent text-ink-950 transition hover:bg-accent-deep disabled:bg-ink-700 disabled:text-ink-500"
                   title="发送"

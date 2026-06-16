@@ -9,7 +9,8 @@
 - ✅ **UI 颠覆**：暗色 · 工程制图科技（rhemax 黑红蓝 `#1A1815/#BF4136/#5D85A8`），作品在暗场发光；assistant 走 markdown 渲染
 - ✅ **卡片式提问 + 布局编辑器**：澄清走可点选卡片（零打字）；方案定稿后**自动弹 react-konva 布局编辑器**（拖拽 / 缩放 / L 形精调，或一键跳过）→ 截图喂生图
 - ✅ **工业级一致性**：identity 身份锁定 + 画风锚 + **进化式参考链**（judge 门控）+ **平面图条件化生图**（编辑器截图 → 喂模型出贴合布局的 3D）
-- ✅ 对话持久化（流式存盘，切项目 / 刷新不丢）
+- ✅ 对话持久化 + **附件资产化**（上传先落 `.data/projects/<id>/attachments`，消息只存引用；发给模型前临时还原 / 提取）
+- ✅ **Run 记录 + 代码层流程守卫**：每轮 `/api/agent` 生成 runId，记录 step/tool/deliverable；final render 必须已有 spec.identity 且布局已确认或明确跳过
 - ⬜ **Phase 5** 生产化（DB / auth / 成本核算 / 部署）
 
 **工作台**（`/projects/:projectId`）三栏暗色科技界面：左项目面板（列表 / 切换 / 新建 / 删除）｜ 中对话（文字 / 语音 / 上传 + **卡片选择** + markdown；交付图标"推荐"、单击放大）｜ 右资产画廊。需要拍板时大脑出**卡片 + 俯视草图**让你点选；布局可进编辑器拖拽精调 → 截图喂生图。工具过程默认隐藏（调试开关可见）。
@@ -17,7 +18,7 @@
 ## 技术栈
 Next.js 16 + React 19 + TypeScript + **AI SDK 6** + **Vercel AI Gateway**（模型唯一来源）。UI：Tailwind 4 暗色 token + react-markdown（assistant 渲染）+ **react-konva**（2D 布局编辑器，`toDataURL` 截图喂生图）。
 脑 `anthropic/claude-opus-4.8` · 文生图 `openai/gpt-image-2` · **参考条件化 / 编辑 `google/gemini-3-pro-image`**（换角度 / 平面图条件化；可选 gpt-image-2 直连）· **判图 + 写 prompt `anthropic/claude-opus-4.8`**（升 Opus，质量优先）· 语音清理 `deepseek/deepseek-v4-flash`（均经 Gateway）· ASR `fun-asr-realtime`（DashScope）+ gpt-image-2 图编辑（OpenAI 直连）为 Gateway 例外。
-docx/xlsx 上传服务端提取（mammoth / **ExcelJS**，含大小/行数/文本上限防护）；图片/PDF Opus 4.8 原生识别。
+上传先资产化为轻量引用；发给模型前服务端按需读取。docx/xlsx 用 mammoth / **ExcelJS** 提取（含大小/行数/文本上限防护）；图片/PDF Opus 4.8 原生识别。
 
 ## 快速开始
 ```bash
@@ -53,4 +54,4 @@ scripts/pipeline-spike.mjs     # 进化式多视角端到端
 | Claude Code 接手须知 | [CLAUDE.md](CLAUDE.md) |
 
 ## 红线
-模型唯一经 Gateway（ASR 例外）· 自检对用户隐形 · 品牌无素材只占位 · `.env.local` / `.data/` 不入库 · 中文对话/注释/commit。
+模型唯一经 Gateway（ASR + gpt-image-2 图编辑直连例外）· 自检对用户隐形 · final render 不绕过 spec/layout 决策 · 品牌无素材只占位 · `.env.local` / `.data/` 不入库 · 中文对话/注释/commit。

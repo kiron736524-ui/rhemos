@@ -12,17 +12,17 @@
 | 改大脑行为 / 工作循环 / 铁律 | `src/agent/system-prompt.ts`（PREAMBLE）|
 | 改领域知识（决策型在大脑 / 执行型在 prompt-writer）| `src/knowledge/skills/*` + `src/knowledge/rubrics/*`（D26 分流：大脑装决策型 7 skill + 2 rubric；写图细节 6 skill 归 `prompt-writer`）|
 | 加 / 改工具 | `src/tools/*.ts` → 注册在 `src/agent/orchestrator.ts` |
-| 循环退出 / 生图预算 | `src/agent/orchestrator.ts`（`stopWhen` / `imageBudget`）|
+| 循环退出 / 生图预算 / Run 记录 | `src/agent/orchestrator.ts`（`stopWhen` / `imageBudget`）+ `src/app/api/agent/route.ts`（创建 runId、记录 step/finish）+ `src/lib/storage.ts`（runs 文件）|
 | 判图逻辑（结构化打分）| `src/agent/inspect.ts` |
-| 存储 / 数据形状 / 项目列表 / 业务记忆 | `src/lib/storage.ts`（projectId-keyed + 写锁 + `listProjects`/`deleteProject` + `mergeBrief` 写 brief + 删除 tombstone 防复活）+ `src/lib/types.ts` |
-| API 入口 | `src/app/api/agent/route.ts`（tool 入参兜底 + 附件预处理）；图片读出 `assets/[id]`；项目列表/删除 `projects/` + `projects/[id]`；项目状态 `projects/[id]/state`；语音 `asr` |
-| 上传附件提取（docx→文字+内嵌图 / xlsx→CSV，含大小/行数/文本上限）| `src/lib/attachments.ts`（mammoth / ExcelJS）|
+| 存储 / 数据形状 / 项目列表 / 业务记忆 | `src/lib/storage.ts`（projectId-keyed + 写锁 + `listProjects`/`deleteProject` + `mergeBrief` 写 brief + 附件/Run/layout 状态 + 删除 tombstone 防复活）+ `src/lib/types.ts` |
+| API 入口 | `src/app/api/agent/route.ts`（Run 创建 + tool 入参兜底 + 附件引用预处理）；图片读出 `assets/[id]`；附件资产化 `projects/[id]/attachments`；项目列表/删除/状态；语音 `asr` |
+| 上传附件资产化 + 提取（docx→文字+内嵌图 / xlsx→CSV，含大小/行数/文本上限）| `src/app/api/projects/[projectId]/attachments/*` + `src/lib/attachments.ts`（mammoth / ExcelJS）|
 | brief 业务记忆写入 | `src/tools/update-brief.ts` + `storage.mergeBrief`（澄清拍板后增量落事实）|
 | 语音输入 ASR | `src/lib/asr/{funasr,cleanup}.ts` + `src/components/VoiceInputButton.tsx` |
 | 前端工作台（三栏暗色科技）| `src/app/projects/[projectId]/page.tsx`（面板 / 对话 / 画廊 / 上传 / **卡片** / **markdown** / lightbox）；`src/app/page.tsx` 仅 redirect→default |
 | 卡片提问 / 选项卡 + 俯视草图 | `src/tools/present-choices.ts` + 前端 `ChoiceCards`/`FloorPlan`（page.tsx）|
-| 布局编辑器（拖拽/缩放/L形/截图喂生图）| `src/components/LayoutEditor.tsx`(react-konva) + `/layout-demo` 演示页 |
-| 生图（**唯一入口**）/ 多视角 / 平面图条件化 | `src/tools/render.ts`（中文意图 → prompt-writer → best-of-N / 进化链 / 平面图条件化 + 门控）|
+| 布局编辑器（拖拽/缩放/L形/截图喂生图）| `src/components/LayoutEditor.tsx`(react-konva) + `/layout-demo` 演示页；布局 schema/裁剪在 `src/lib/layout.ts` |
+| 生图（**唯一入口**）/ 多视角 / 平面图条件化 | `src/tools/render.ts`（中文意图 → prompt-writer → best-of-N / 进化链 / 平面图条件化 + 门控；final render 硬要求 spec.identity + layout confirmed/skipped）|
 | 写图 prompt（子 agent）| `src/agent/prompt-writer.ts`（中文意图 → 英文五层 prompt，带执行型知识；中间产物不回流大脑）|
 | 对话持久化 | `src/lib/storage.ts`(conversation) + `api/projects/[id]/messages` + page.tsx 流式存盘 effect |
 | **为什么这么设计** | `docs/DECISIONS.md` |
@@ -36,6 +36,7 @@
 3. **品牌无素材只占位**、不臆造文字 / Logo。
 4. 知识层是大脑的**参考与判断工具**，不是死板脚本；**不要重建 FSM / blockingField** 那套调度机器。
 5. `.env.local` / `.data/` 绝不入库。
+6. final render 不能绕过 `update_spec` 与布局决策；要草图只能显式 `mode=concept`。
 
 ## 实测 gotchas（踩过的坑，省你时间）
 - **gpt-image-2 慢**：low~8s / medium~30s / high~200s。概念/迭代用 medium，high 仅单张终图。默认画幅 1024。
@@ -51,6 +52,8 @@
 - **图像编辑 / 参考图：默认走 `generateText` + input image part 经 `gemini-3-pro-image`**（gpt-image-2 经 Gateway 图输入实测 4 路全不通：chat/responses 拒 "image model"、`images.edit` 404，见 D27）。要用 gpt-image-2 须**直连 OpenAI**——`generateImageFromRefs` 有 `OPENAI_API_KEY` 自动走直连、否则回退 Gemini。
 - **多视角一致性**：单参考换角度方差大（实测 62~88，故 best-of-N 择优是刚需）；累积参考链能提升一致性，但**把漂移图当参考会传染漂移** → 必须判图门控（仅通过的进参考池，`CONSISTENCY_GATE=70`）。`generate_views` 是落地。
 - **平面图条件化最强**：方案定稿 → `present_layout` **自动弹** `LayoutEditor` → 用户拖好 → `toDataURL()` 截图 → `render`(planAssetId) 以平面图为硬参考出 3D，比纯文字 prompt 精确一个量级。
+- **附件不再进 conversation.json 存 base64**：前端发送前先上传到 `/api/projects/:id/attachments`，UIMessage 只保留 URL；`preprocessAttachments` 发给模型前临时读取、提取或还原。若看到历史对话里还有 data URL，多半是旧消息。
+- **Run 是最小运行记录，不是完整队列**：每轮 agent 写 `.data/projects/<id>/runs/<runId>.json`，可追 step/tool/deliverable/status；真正的取消、重试恢复、成本计价和跨进程队列仍是 Phase 5。
 - **react-konva 要 `dynamic(ssr:false)`**（用 canvas，SSR 报错）；canvas 内对象不是 DOM，preview_click 点不到（要真鼠标）。
 - **dev 模式偶发跳 default**：新动态路由（`/projects/<新id>`）+ agent 长 SSE 流交织时整页 reload→根→redirect default。用左栏"新建项目"(SPA) 正常；对话已流式存盘不丢；**生产 build 无此问题**。
 - **生图画风锚**：`RENDER_STYLE_ANCHOR`+`withRenderStyle` 代码层强制注入工业渲染风，否则 gpt-image-2 漂向 CG/插画/示意图（尤其 turnaround sheet 措辞）。
@@ -59,7 +62,7 @@
 - **brief 是要主动写的**：`ProjectState.brief` 不会自己填——大脑须在澄清拍板后调 `update_brief` 增量落事实（`storage.mergeBrief`），否则 `read_project_state` 永远读到空 `{}`、跨轮记忆丢失、重复追问。
 
 ## 现状
-Phase 0-4 完成并实测，并经三轮重大升级：**UI 颠覆**（暗色工程制图科技，rhemax 黑红蓝）· **卡片提问 + 布局编辑器**（`present_choices` 可点卡片 + 俯视草图，零打字；react-konva `LayoutEditor` 拖拽精调 → 截图喂生图）· **工业级一致性**（identity 锁定 / 画风锚 / 进化式参考链 + 判图门控 / 平面图条件化生图，参考条件化用 Gemini 3 Pro Image）· **对话持久化**（流式存盘）。Phase 5（生产化：DB / auth / 成本核算 / 部署 / 长任务队列）未做，见 `engineering-plan.md`。
+Phase 0-4 完成并实测，并经多轮重大升级：**UI 颠覆**（暗色工程制图科技，rhemax 黑红蓝）· **卡片提问 + 布局编辑器**（`present_choices` 可点卡片 + 俯视草图，零打字；react-konva `LayoutEditor` 拖拽精调 → 截图喂生图）· **工业级一致性**（identity 锁定 / 画风锚 / 进化式参考链 + 判图门控 / 平面图条件化生图，参考条件化用 Gemini 3 Pro Image）· **对话持久化 + 附件资产化** · **最小 Run 记录 + final render 代码守卫**。Phase 5（生产化：DB / auth / 成本核算 / 部署 / 长任务队列）未做，见 `engineering-plan.md`。
 
 ## 深入阅读顺序
 `docs/ARCHITECTURE.md`（如何建）→ `docs/DECISIONS.md`（为何这么定）→ `docs/engineering-plan.md`（路线图）→ `docs/domain-knowledge.md` + `src/knowledge/README.md`（领域知识层）→ `rhemos-build-plan.md`（最初策略基线）。

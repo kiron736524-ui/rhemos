@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { saveAsset } from '@/lib/storage';
+import { markLayoutConfirmed, saveAsset } from '@/lib/storage';
 
 export const runtime = 'nodejs';
 
@@ -22,5 +22,6 @@ export async function POST(req: Request, ctx: { params: Promise<{ projectId: str
   const bytes = new Uint8Array(Buffer.from(b64, 'base64'));
   if (bytes.length > MAX_REF_BYTES) return NextResponse.json({ error: 'image too large' }, { status: 413 });
   const asset = await saveAsset(projectId, bytes, { kind: 'reference', prompt: '布局平面图（用户在编辑器定稿）' });
+  await markLayoutConfirmed(projectId, asset.id);
   return NextResponse.json({ assetId: asset.id, url: asset.url });
 }

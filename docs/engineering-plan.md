@@ -243,13 +243,13 @@ loop (大脑自主):
 ### Phase 4 · 产品骨架（隔离 + 用户可见层边界）· 据架构批评优化
 > 走向产品的第一优先级不是加模型能力，而是**隔离 / 沉淀 / 边界**。以下都不依赖部署决定。
 - [x] **ASR 语音输入**（Fun-ASR 直连 + DeepSeek V4 Flash 清理 + 录音前端 `VoiceInputButton`）。
-- [x] **projectId 隔离落地**：storage 从单一 `DEFAULT_PROJECT` 改 projectId-keyed（`.data/projects/<id>/`）；projectId 入 URL（`/projects/:projectId`）并注入工具 `experimental_context`。左侧项目面板：列表 / 切换载入 / 新建 / 删除 / 当前高亮。（session / run 子层暂缓，projectId 已够隔离。）
+- [x] **projectId 隔离落地**：storage 从单一 `DEFAULT_PROJECT` 改 projectId-keyed（`.data/projects/<id>/`）；projectId 入 URL（`/projects/:projectId`）并注入工具 `experimental_context`。左侧项目面板：列表 / 切换载入 / 新建 / 删除 / 当前高亮。最小 Run 记录已落地；完整队列/取消/重试仍归 Phase 5。
 - [x] **inspection 沉淀回 asset**：`generate_best_of_n`/`revise_asset`/`render_multiview_sheet` 判图结果经 `addInspection` 写回 `Asset.inspections`，修了"判完不写回 → `read_project_state` 永远空"的真 bug。
 - [x] **用户态 / 调试态 UI 分层**：三栏工作台（项目面板 / 对话 / 资产画廊）；交付图进对话气泡（"✓ 推荐"标记），工具过程默认隐藏、**调试开关**才露；**用户级进度旁白**（"正在整理方案/生成候选/筛选/修正结构"），不露评分。
-- [x] **多模态上传**（计划外补充）：图片/PDF（Opus 原生）+ Word（mammoth 提取正文+内嵌图）+ Excel（SheetJS 转 CSV），服务端 `src/lib/attachments.ts` 预处理；附件 Claude 式缩略图 / 悬浮预览 / 单击放大 / 文件卡片。
+- [x] **多模态上传**（计划外补充）：上传先资产化为轻量引用；图片/PDF（Opus 原生）+ Word（mammoth 提取正文+内嵌图）+ Excel（ExcelJS 转 CSV），服务端 `src/lib/attachments.ts` 按需预处理；附件 Claude 式缩略图 / 悬浮预览 / 单击放大 / 文件卡片。
 - [x] **轻并发安全**：per-project 写锁（`withLock`，进程内串行化 state.json 写）。
 - [ ] **用户选图=强信号**（未做）：选某候选"用这张继续"→ 后续围绕它、不自动改选 recommended；重生(开分支) vs 改图(派生 parentId) 在 UX 显性化。
-- [ ] **薄代码级不变量（非 FSM）**（未做）：生图前必须有 spec / 预算 / 用户选图锁定 等写成工具前置条件（代码硬保证）。
+- [x] **薄代码级不变量（非 FSM）**（部分落地）：final render 必须有 `spec.identity`，且布局已 confirmed/skipped；`render` 内部有单工具图片预算硬上限。用户选图锁定仍未做。
 - **验收**：✅ 多项目互不污染、用户只见两端+资产、inspection 有记忆、上传/语音可用；⬜ 选图强信号 + 薄不变量待补。
 
 ### Phase 5 · 生产化（部署时做；当前 deploy/auth 已缓，见 DECISIONS D13）

@@ -9,7 +9,7 @@ export async function GET(_req: Request, ctx: { params: Promise<{ projectId: str
   if (!/^[\w-]+$/.test(projectId)) return NextResponse.json({ error: 'bad project id' }, { status: 400 });
   const s = await readState(projectId);
   return NextResponse.json(
-    { id: s.id, spec: s.spec ?? null, assets: s.assets, updatedAt: s.updatedAt },
+    { id: s.id, spec: s.spec ?? null, layout: s.layout ?? null, assets: s.assets, attachments: s.attachments ?? [], runs: s.runs ?? [], updatedAt: s.updatedAt },
     { headers: { 'Cache-Control': 'no-store' } },
   );
 }

@@ -1,6 +1,7 @@
 import mammoth from 'mammoth';
 import ExcelJS from 'exceljs';
 import type { UIMessage } from 'ai';
+import { loadAttachment } from './storage';
 
 // 附件预处理：图片/PDF 是 Opus 4.8 原生支持（原样传）；docx/xlsx 模型不能直接读，
 // 在服务端提取成文字（docx 还提取内嵌图）后注入消息，让大脑能识别。
@@ -23,6 +24,13 @@ function dataUrlToBuffer(url: string): Buffer | null {
   return Buffer.from(url.slice(i + 7), 'base64');
 }
 
+function attachmentIdFromUrl(url: string, projectId: string): string | null {
+  const m = url.match(/^\/api\/projects\/([\w-]+)\/attachments\/([\w-]+)/);
+  if (!m || m[1] !== projectId) return null;
+  return m[2];
+}
+
+const toDataUrl = (mediaType: string, buf: Buffer) => `data:${mediaType};base64,${buf.toString('base64')}`;
 const mb = (n: number) => (n / (1024 * 1024)).toFixed(1);
 
 async function extractDocx(buf: Buffer, name: string): Promise<AnyPart[]> {
@@ -102,7 +110,21 @@ async function extractXlsx(buf: Buffer, name: string): Promise<AnyPart[]> {
   return [{ type: 'text', text: `【Excel「${name}」提取内容（CSV）${truncated ? '，已按上限截断' : ''}】\n${body}` }];
 }
 
-export async function preprocessAttachments(messages: UIMessage[]): Promise<UIMessage[]> {
+async function filePartBuffer(part: AnyPart, projectId: string): Promise<{ buf: Buffer; mediaType: string; filename: string } | null> {
+  if (!part.url) return null;
+  const fromData = dataUrlToBuffer(part.url);
+  if (fromData) return { buf: fromData, mediaType: part.mediaType ?? 'application/octet-stream', filename: part.filename ?? 'attachment' };
+  const attachmentId = attachmentIdFromUrl(part.url, projectId);
+  if (!attachmentId) return null;
+  const { attachment, bytes } = await loadAttachment(projectId, attachmentId);
+  return {
+    buf: Buffer.from(bytes),
+    mediaType: attachment.mediaType,
+    filename: attachment.filename,
+  };
+}
+
+export async function preprocessAttachments(messages: UIMessage[], projectId = 'default'): Promise<UIMessage[]> {
   return Promise.all(
     messages.map(async (msg) => {
       const parts = (msg as { parts?: AnyPart[] }).parts;
@@ -112,8 +134,9 @@ export async function preprocessAttachments(messages: UIMessage[]): Promise<UIMe
         const lower = part.filename?.toLowerCase() ?? '';
         const isDocx = part.type === 'file' && (part.mediaType === DOCX || lower.endsWith('.docx'));
         const isXlsx = part.type === 'file' && (part.mediaType === XLSX_MT || lower.endsWith('.xlsx') || lower.endsWith('.xls'));
-        if ((isDocx || isXlsx) && part.url) {
-          const buf = dataUrlToBuffer(part.url);
+        if (part.type === 'file' && part.url) {
+          const loaded = await filePartBuffer(part, projectId);
+          const buf = loaded?.buf ?? null;
           if (!buf) {
             newParts.push(part);
             continue;
@@ -123,9 +146,16 @@ export async function preprocessAttachments(messages: UIMessage[]): Promise<UIMe
             continue;
           }
           try {
-            newParts.push(
-              ...(isDocx ? await extractDocx(buf, part.filename ?? 'document.docx') : await extractXlsx(buf, part.filename ?? 'sheet.xlsx')),
-            );
+            if (isDocx || loaded?.filename.toLowerCase().endsWith('.docx')) {
+              newParts.push(...(await extractDocx(buf, loaded?.filename ?? part.filename ?? 'document.docx')));
+            } else if (isXlsx || loaded?.filename.toLowerCase().endsWith('.xlsx') || loaded?.filename.toLowerCase().endsWith('.xls')) {
+              newParts.push(...(await extractXlsx(buf, loaded?.filename ?? part.filename ?? 'sheet.xlsx')));
+            } else if (loaded && !part.url.startsWith('data:')) {
+              // 对话里只存轻量附件 URL；发给模型前临时还原为 data URL。图片/PDF 仍走多模态原生识别。
+              newParts.push({ ...part, mediaType: loaded.mediaType, filename: loaded.filename, url: toDataUrl(loaded.mediaType, buf) });
+            } else {
+              newParts.push(part);
+            }
           } catch (e) {
             newParts.push({ type: 'text', text: `【附件「${part.filename}」解析失败：${e instanceof Error ? e.message : '未知错误'}】` });
           }

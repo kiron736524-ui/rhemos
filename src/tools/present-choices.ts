@@ -1,5 +1,6 @@
 import { tool } from 'ai';
 import { z } from 'zod';
+import { boothLayoutSchema, normalizeBoothLayout } from '@/lib/layout';
 
 // 结构化卡片提问（替代纯文字问答）。大脑调用它，前端渲染成可点击卡片，用户点选后零打字回传。
 // 每个选项可带一张 SVG 俯视布局草图，让用户看着结构选。非阻塞：execute 纯透传，前端据此渲染。
@@ -20,33 +21,7 @@ export const presentChoices = tool({
               z.object({
                 label: z.string().describe('选项简短标题'),
                 detail: z.string().optional().describe('选项说明 + designImpact（选了会怎样）'),
-                layout: z
-                  .object({
-                    length: z.number().describe('长边长度（米）'),
-                    width: z.number().describe('短边长度（米）'),
-                    openings: z
-                      .array(z.enum(['front', 'back', 'left', 'right']))
-                      .optional()
-                      .describe('开口的边（front=前/主通道侧，back=后/主墙侧，left/right=左右）；开口边会画成虚线'),
-                    facing: z.string().optional().describe('主视觉/正面朝向，如 "主视觉朝前(主通道)"'),
-                    zones: z
-                      .array(
-                        z.object({
-                          name: z.string().describe('区名，如 "LED主屏"、"封闭洽谈"'),
-                          type: z
-                            .enum(['led', 'stage', 'brand', 'reception', 'meeting', 'storage', 'product', 'plant', 'aisle'])
-                            .optional()
-                            .describe('类型（决定配色：led/stage蓝、brand红、meeting/storage深块、plant绿…）'),
-                          x: z.number().describe('左上角 X（米）；坐标原点在左上角，x 向右沿长边'),
-                          y: z.number().describe('左上角 Y（米）；y 向下沿短边，上边=back主墙侧、下边=front主通道侧'),
-                          w: z.number().describe('宽（米，沿长边方向）'),
-                          h: z.number().describe('进深（米，沿短边方向）'),
-                          note: z.string().optional().describe('备注，如 "12㎡"、"5台电视"、"6-8人"'),
-                        }),
-                      )
-                      .min(1)
-                      .describe('所有功能区（含精确位置+尺寸，米制）'),
-                  })
+                layout: boothLayoutSchema
                   .optional()
                   .describe('结构化俯视布局数据，前端 FloorPlan 渲染器自动画成精致平面图（真实比例+尺寸标注+网格+配色）。布局类选项一律用它，绝不输出原始 SVG/HTML。'),
               }),
@@ -60,5 +35,12 @@ export const presentChoices = tool({
       .describe('最多 3 个硬核问题'),
   }),
   // 非阻塞透传：前端检测此工具输出 → 渲染卡片；用户点选 → sendMessage 回传选择。
-  execute: async (input) => ({ ...input, _kind: 'choices' as const }),
+  execute: async (input) => ({
+    ...input,
+    questions: input.questions.map((q) => ({
+      ...q,
+      options: q.options.map((o) => (o.layout ? { ...o, layout: normalizeBoothLayout(o.layout) } : o)),
+    })),
+    _kind: 'choices' as const,
+  }),
 });

@@ -1,13 +1,14 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { MAX_PARALLEL_IMAGES, MODEL_IDS, openaiViaGateway, withRenderStyle, generateImageFromRefs } from '@/models/gateway';
-import { addInspection, loadAssetBytes, projectIdFromContext, readState, saveAsset } from '@/lib/storage';
+import { addInspection, loadAssetBytes, markLayoutConfirmed, projectIdFromContext, readState, recordRunDeliverable, runIdFromContext, saveAsset } from '@/lib/storage';
 import { inspectImage, inspectConsistency, toInspectionResult, consistencyToInspectionResult } from '@/agent/inspect';
 import { writeImagePrompt } from '@/agent/prompt-writer';
 import type { Deliverable, DeliverableAsset } from '@/lib/types';
 
 const GATE = 70; // 进化链一致性门控（漂移图不进参考池）
 const MAX_VIEWS = 4; // 单次视角硬上限（事前预算边界）
+const MAX_IMAGES_PER_RENDER = 10; // 单工具内部硬预算：挡住 stopWhen 之前的跑飞
 
 // 唯一生图入口（合并 best-of-N / 多视角进化链 / 平面图条件化）。大脑只给中文意图，
 // prompt-writer 子 agent 写英文 prompt；identity / 判图要点自读 spec；出口统一 Deliverable。
@@ -24,23 +25,43 @@ export const render = tool({
       .default([])
       .describe('要的额外角度（英文，如 ["a pure straight-on left side view","a top-down orthographic floor plan view"]）；留空=只出正面主图。最多 4 个'),
     planAssetId: z.string().optional().describe('用户在布局编辑器定稿的俯视平面图 reference 资产 id（有=按平面图硬参考出图）'),
+    mode: z.enum(['concept', 'final']).default('final').describe('concept=早期方向探索，可无 spec；final=最终交付，必须已有 spec.identity 且布局已确认或明确跳过'),
     quality: z.enum(['low', 'medium', 'high']).default('high'),
     size: z.enum(['1024x1024', '1536x1024', '1024x1536']).default('1024x1024'),
     n: z.number().int().min(1).max(MAX_PARALLEL_IMAGES).default(2).describe('每张图 best-of-N 候选数（对抗采样方差，实测单次方差大）'),
   }),
-  execute: async ({ intent, views, planAssetId, quality, size, n }, opts) => {
-    const pid = projectIdFromContext((opts as { experimental_context?: unknown }).experimental_context);
+  execute: async ({ intent, views, planAssetId, mode, quality, size, n }, opts) => {
+    const ctx = (opts as { experimental_context?: unknown }).experimental_context;
+    const pid = projectIdFromContext(ctx);
+    const runId = runIdFromContext(ctx);
     const s = await readState(pid);
     const identity = s.spec?.identity ?? '';
     const criteria = s.spec?.selfCheckCriteria || intent; // 没 spec 时用 intent 兜底判图要点
     if (views.length > MAX_VIEWS) views = views.slice(0, MAX_VIEWS);
+    const requestedImages = n * (1 + views.length);
+    if (requestedImages > MAX_IMAGES_PER_RENDER) {
+      return { error: `本次 render 预计 ${requestedImages} 张，超过单工具上限 ${MAX_IMAGES_PER_RENDER} 张；请减少 views 或 n。`, code: 'RENDER_BUDGET_EXCEEDED' };
+    }
 
-    const plan = planAssetId ? await loadAssetBytes(pid, planAssetId).catch(() => null) : null;
-    if (planAssetId && !plan) return { error: `找不到平面图资产 ${planAssetId}` };
+    const effectivePlanAssetId = planAssetId ?? (s.layout?.status === 'confirmed' ? s.layout.planAssetId : undefined);
+    if (mode === 'final') {
+      if (!identity.trim()) {
+        return { error: '最终出图前必须先 update_spec 写入 identity；如果只是方向草图，请用 mode=concept。', code: 'FINAL_RENDER_REQUIRES_SPEC' };
+      }
+      if (!effectivePlanAssetId) {
+        if (!s.layout) return { error: '最终出图前必须先调用 present_layout，让用户确认布局或明确跳过。', code: 'FINAL_RENDER_REQUIRES_LAYOUT_DECISION' };
+        if (s.layout.status === 'pending') return { error: '布局仍待用户确认：请等待用户在布局编辑器确认，或让用户点击“按原方案直接出图”。', code: 'LAYOUT_PENDING' };
+        if (s.layout.status !== 'skipped') return { error: '布局状态不完整：请重新 present_layout，或让用户明确跳过布局精调。', code: 'LAYOUT_DECISION_REQUIRED' };
+      }
+    }
+
+    const plan = effectivePlanAssetId ? await loadAssetBytes(pid, effectivePlanAssetId).catch(() => null) : null;
+    if (effectivePlanAssetId && !plan) return { error: `找不到平面图资产 ${effectivePlanAssetId}` };
+    if (effectivePlanAssetId && plan) await markLayoutConfirmed(pid, effectivePlanAssetId);
     const client = openaiViaGateway();
 
     // ① prompt-writer 子 agent：意图 → 英文五层主图 prompt（不占大脑上下文）
-    const frontPrompt = await writeImagePrompt({ intent, identity, kind: plan ? 'plan' : 'front' });
+    const frontPrompt = await writeImagePrompt({ intent, identity, kind: mode === 'concept' ? 'concept' : plan ? 'plan' : 'front' });
     console.log(`[render] mode=${plan ? 'plan' : views.length ? 'views' : 'single'} views=${views.length} n=${n} q=${quality} 预计生图≈${n * (1 + views.length)} 张`);
 
     // ② 主图 best-of-N（文生图 或 平面图条件化）
@@ -54,7 +75,7 @@ export const render = tool({
       );
       if (!raw.length) return { error: '主图生成失败（按平面图）' };
       for (const b of raw) {
-        const a = await saveAsset(pid, b, { kind: 'booth-image', prompt: 'plan-conditioned front', parentId: planAssetId });
+        const a = await saveAsset(pid, b, { kind: 'booth-image', prompt: 'plan-conditioned front', parentId: effectivePlanAssetId });
         const insp = await inspectImage(b, criteria);
         await addInspection(pid, a.id, toInspectionResult(insp, MODEL_IDS.inspect));
         heroCands.push({ bytes: b, assetId: a.id, url: a.url, score: insp.score, failN: insp.fails.length });
@@ -91,6 +112,7 @@ export const render = tool({
         score: c.score,
       }));
       const single: Deliverable = { type: 'single', assets, recommendedId: hero.assetId, ...(hero.failN ? { issues: [`主图有 ${hero.failN} 处客观待改`] } : {}) };
+      await recordRunDeliverable(pid, runId, single);
       return single;
     }
 
@@ -121,6 +143,7 @@ export const render = tool({
       if (!passed) issues.push(`${view}：一致性偏弱(${best.c.consistencyScore}<${GATE})，可 revise 或重出`);
     }
     const deliverable: Deliverable = { type: plan ? 'plan-conditioned' : 'view-set', assets, recommendedId: hero.assetId, ...(issues.length ? { issues } : {}) };
+    await recordRunDeliverable(pid, runId, deliverable);
     return deliverable;
   },
 });
