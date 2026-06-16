@@ -1,6 +1,6 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { MAX_PARALLEL_IMAGES, MODEL_IDS, openaiViaGateway, withRenderStyle, generateImageFromRefs } from '@/models/gateway';
+import { MAX_PARALLEL_IMAGES, MODEL_IDS, withRenderStyle, generateImageFromRefs, falTextToImage } from '@/models/gateway';
 import { addInspection, loadAssetBytes, markLayoutConfirmed, projectIdFromContext, readState, recordRunDeliverable, runIdFromContext, saveAsset } from '@/lib/storage';
 import { inspectImage, inspectConsistency, toInspectionResult, consistencyToInspectionResult } from '@/agent/inspect';
 import { writeImagePrompt } from '@/agent/prompt-writer';
@@ -58,7 +58,6 @@ export const render = tool({
     const plan = effectivePlanAssetId ? await loadAssetBytes(pid, effectivePlanAssetId).catch(() => null) : null;
     if (effectivePlanAssetId && !plan) return { error: `找不到平面图资产 ${effectivePlanAssetId}` };
     if (effectivePlanAssetId && plan) await markLayoutConfirmed(pid, effectivePlanAssetId);
-    const client = openaiViaGateway();
 
     // ① prompt-writer 子 agent：意图 → 英文五层主图 prompt（不占大脑上下文）
     const frontPrompt = await writeImagePrompt({ intent, identity, kind: mode === 'concept' ? 'concept' : plan ? 'plan' : 'front' });
@@ -82,15 +81,9 @@ export const render = tool({
       }
     } else {
       const full = withRenderStyle(`${identity}\n\n${frontPrompt}`);
-      const raw = (
-        await Promise.all(
-          Array.from({ length: n }, async () => {
-            const r = await client.images.generate({ model: MODEL_IDS.image, prompt: full, size, quality, n: 1 });
-            const b64 = r.data?.[0]?.b64_json ?? '';
-            return b64 ? new Uint8Array(Buffer.from(b64, 'base64')) : null;
-          }),
-        )
-      ).filter((b): b is Uint8Array<ArrayBuffer> => b !== null);
+      const raw = (await Promise.all(Array.from({ length: n }, () => falTextToImage(full, { quality, size }).catch(() => null)))).filter(
+        (b): b is Uint8Array => b !== null,
+      );
       if (!raw.length) return { error: '主图生成失败（无返回）' };
       for (const b of raw) {
         const a = await saveAsset(pid, b, { kind: 'booth-image', prompt: frontPrompt });

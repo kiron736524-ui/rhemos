@@ -1,10 +1,10 @@
 import { gateway } from '@ai-sdk/gateway';
 import { generateText } from 'ai';
-import OpenAI, { toFile } from 'openai';
 
 /**
- * 所有模型调用经 Vercel AI Gateway（唯一来源，ASR 除外）。
- * 鉴权用 AI_GATEWAY_API_KEY（见 .env.local，已 gitignore）。
+ * 多来源模型路由：脑 / 判图 / prompt-writer / 语音清理经 **Vercel AI Gateway**；
+ * **gpt-image-2 经 fal.ai**（文生图 + 图编辑，见下方 fal 封装）；**ASR 经阿里云 DashScope**（直连）。
+ * 鉴权：AI_GATEWAY_API_KEY / FAL_API_KEY / DASHSCOPE_API_KEY（均在 .env.local，已 gitignore）。
  */
 export const MODEL_IDS = {
   /** 对话 + 工程脑：负责澄清、写 DesignSpec、写 prompt、写纠正 prompt、判断 */
@@ -34,20 +34,38 @@ export const INSPECT_CANDIDATES = [
 /** 语言/推理脑（Opus 4.8） */
 export const brain = () => gateway.languageModel(MODEL_IDS.brain);
 
-/** 生图模型（gpt-image-2） */
-export const imageModel = () => gateway.imageModel(MODEL_IDS.image);
-
-/** 视觉判图器（默认 Sonnet 4.6，可传入候选 id 切换/升级） */
+/** 视觉判图器（默认档见 MODEL_IDS.inspect，可传入候选 id 切换/升级） */
 export const inspector = (id: string = MODEL_IDS.inspect) =>
   gateway.languageModel(id);
 
-/**
- * 生图走 Gateway 的 OpenAI 兼容端点（OpenAI SDK 直连），以精确控制 quality/size/n。
- * 实测：AI SDK generateImage 与 Gateway 图像端点均不支持 partial_images 流式、不采纳 output_format=jpeg（强制 PNG）。
- */
-export const GATEWAY_OPENAI_BASE = 'https://ai-gateway.vercel.sh/v1';
-export const openaiViaGateway = () =>
-  new OpenAI({ apiKey: process.env.AI_GATEWAY_API_KEY, baseURL: GATEWAY_OPENAI_BASE });
+// ── fal.ai：gpt-image-2 的来源（文生图 + 图编辑）。实测 gpt-image-2 经 Gateway 接不通图输入（D27），
+// fal 提供 generate + edit 两端点、接受 base64 data URI（免上传 storage）、输出托管 URL。默认 1024 + quality high（用户指定）。
+const FAL_BASE = 'https://fal.run';
+const FAL_SIZE: Record<string, string> = { '1024x1024': 'square_hd', '1536x1024': 'landscape_4_3', '1024x1536': 'portrait_4_3' };
+const falSize = (s?: string) => FAL_SIZE[s ?? ''] ?? 'square_hd';
+const falHeaders = () => ({ Authorization: `Key ${process.env.FAL_API_KEY}`, 'Content-Type': 'application/json' });
+
+/** 调 fal 同步端点 → 取首图 URL → 下载字节。失败返回 null。 */
+async function falImage(endpoint: string, body: Record<string, unknown>): Promise<Uint8Array | null> {
+  const res = await fetch(`${FAL_BASE}/${endpoint}`, { method: 'POST', headers: falHeaders(), body: JSON.stringify(body) });
+  if (!res.ok) return null;
+  const data = (await res.json()) as { images?: { url?: string }[] };
+  const url = data.images?.[0]?.url;
+  if (!url) return null;
+  const ab = await (await fetch(url)).arrayBuffer();
+  return new Uint8Array(ab);
+}
+
+/** fal gpt-image-2 文生图（默认 1024 square_hd + quality high）。 */
+export async function falTextToImage(prompt: string, opts?: { quality?: string; size?: string }): Promise<Uint8Array | null> {
+  return falImage('openai/gpt-image-2', { prompt, image_size: falSize(opts?.size), quality: opts?.quality ?? 'high' });
+}
+
+/** fal gpt-image-2/edit 参考条件化（多图参考走 base64 data URI + 默认 1024 + high）。 */
+export async function falEditFromRefs(refs: Uint8Array[], prompt: string, opts?: { quality?: string; size?: string }): Promise<Uint8Array | null> {
+  const image_urls = refs.map((b) => `data:image/png;base64,${Buffer.from(b).toString('base64')}`);
+  return falImage('openai/gpt-image-2/edit', { prompt, image_urls, image_size: falSize(opts?.size), quality: opts?.quality ?? 'high' });
+}
 
 /** best-of-N 并发上限（成本控制；Phase 2 best-of-N 用） */
 export const MAX_PARALLEL_IMAGES = 2;
@@ -64,26 +82,15 @@ export const RENDER_STYLE_ANCHOR =
 /** 把画风锚追加到任意生图 prompt 末尾（代码层强制兜底）。 */
 export const withRenderStyle = (prompt: string): string => `${prompt}\n\n${RENDER_STYLE_ANCHOR}`;
 
-/** OpenAI 直连（仅当配置 OPENAI_API_KEY）：gpt-image-2 的图编辑端点 images.edit 经 Gateway 实测 404，
- *  要用 gpt-image-2 做参考条件化只能直连 —— 第二个非 Gateway 例外（类比 ASR 直连 DashScope）。 */
-const openaiDirect = () => (process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null);
-
 /**
- * 参考图条件化生图：把一张或多张参考图 + 文字指令喂给多模态图像模型，"看着这个展台"换角度 / 局部编辑，保持一致。
- * 优先 **gpt-image-2 直连 images.edit**（用户指定，多图参考 + quality high；需 OPENAI_API_KEY）；
- * 无 key 或直连失败则回退 **Gemini 3 Pro Image 经 Gateway**。多图参考 = 更强身份锁定（进化链）。失败返回 null。
+ * 参考图条件化生图：参考图 + 指令 → "看着这个展台"换角度 / 局部编辑，保持一致。
+ * 优先 **fal gpt-image-2/edit**（用户指定渠道，默认 1024 + quality high；接受 base64 data URI 免上传）；
+ * fal 失败 / 无 FAL_API_KEY 则回退 **Gemini 3 Pro Image 经 Gateway**。多图参考 = 更强身份锁定（进化链）。失败返回 null。
  */
 export async function generateImageFromRefs(refs: Uint8Array[], instruction: string): Promise<Uint8Array | null> {
-  const direct = openaiDirect();
-  if (direct) {
-    try {
-      const files = await Promise.all(refs.map((b, i) => toFile(Buffer.from(b), `ref${i}.png`, { type: 'image/png' })));
-      const r = await direct.images.edit({ model: 'gpt-image-2', image: files, prompt: instruction, quality: 'high' });
-      const b64 = r.data?.[0]?.b64_json;
-      if (b64) return new Uint8Array(Buffer.from(b64, 'base64'));
-    } catch {
-      /* 直连失败 → 回退 Gemini */
-    }
+  if (process.env.FAL_API_KEY) {
+    const out = await falEditFromRefs(refs, instruction).catch(() => null);
+    if (out) return out;
   }
   const r = await generateText({
     model: gateway.languageModel(MODEL_IDS.imageEdit),
