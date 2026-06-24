@@ -2,10 +2,10 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import { MODEL_IDS, withRenderStyle } from '@/models/gateway';
 import { imageProvider, resolveActiveImageProvider } from '@/models/image-providers';
-import { addInspection, appendRunEvent, loadAssetBytes, projectIdFromContext, readState, recordRunDeliverable, runIdFromContext, saveAsset } from '@/lib/storage';
+import { addInspection, appendRunEvent, loadAssetBytes, projectIdFromContext, readState, recordRunDeliverable, runIdFromContext, saveAsset, saveRenderInputSnapshot } from '@/lib/storage';
 import { inspectImage, toInspectionResult } from '@/agent/inspect';
 import { writeImagePrompt } from '@/agent/prompt-writer';
-import type { Deliverable } from '@/lib/types';
+import type { Deliverable, RenderInputRef } from '@/lib/types';
 
 export const reviseAsset = tool({
   description:
@@ -33,11 +33,27 @@ export const reviseAsset = tool({
     }
     // prompt-writer：中文 fix → 英文"只改一处、其余不变"指令
     const instruction = withRenderStyle(await writeImagePrompt({ intent: fix, identity, kind: 'revise' }));
+    // D32 输入快照：edit 前固化（基于哪张图、什么 fix prompt、什么 spec/layout），provider 失败也留证据。
+    const parentRef: RenderInputRef = { id: parentAssetId, kind: 'asset', role: 'previous_render', url: `/api/assets/${parentAssetId}?project=${pid}` };
+    const snap = await saveRenderInputSnapshot(pid, {
+      runId,
+      mode: 'revise',
+      provider: providerName,
+      model: imageModel,
+      quality: 'high', // revise 走 fal edit 默认 high/1024
+      size: '1024x1024',
+      prompt: instruction,
+      intent: fix,
+      operation: 'revision',
+      specSummary: { hasSpec: !!s.spec, identity: s.spec?.identity, invariants: s.spec?.invariants, selfCheckCriteria: s.spec?.selfCheckCriteria, updatedAt: s.spec?.updatedAt },
+      layoutSummary: s.layout ? { status: s.layout.status, planAssetId: s.layout.planAssetId, proposal: s.layout.proposal } : undefined,
+      refs: [parentRef],
+    });
     const t0 = Date.now();
     const bytes = await imageProvider.editFromRefs([parentBytes], instruction);
     const durationMs = Date.now() - t0;
     if (!bytes) return { error: '局部修复未返回图（编辑模型无输出）' };
-    const asset = await saveAsset(pid, bytes, { kind: 'booth-image', prompt: `revise: ${fix}`, parentId: parentAssetId, provider: providerName, model: imageModel, mode: 'revise', durationMs });
+    const asset = await saveAsset(pid, bytes, { kind: 'booth-image', prompt: `revise: ${fix}`, parentId: parentAssetId, provider: providerName, model: imageModel, quality: 'high', size: '1024x1024', mode: 'revise', durationMs, renderInputId: snap.id, sourceAssetIds: [parentAssetId] });
     const insp = await inspectImage(bytes, criteria);
     await addInspection(pid, asset.id, toInspectionResult(insp, MODEL_IDS.inspect));
     // 统一交付协议（D24 契约①）：单张修订图。

@@ -1,7 +1,7 @@
 import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
-import type { Asset, Attachment, AttachmentKind, BoothLayout, Deliverable, DesignSpec, InspectionResult, ProjectState, ProjectSummary, RunBudget, RunEvent, RunRecord, RunStatus } from './types';
+import type { Asset, Attachment, AttachmentKind, BoothLayout, Deliverable, DesignSpec, InspectionResult, ProjectState, ProjectSummary, RenderInputSnapshot, RunBudget, RunEvent, RunRecord, RunStatus } from './types';
 
 // 本地文件系统存储（Phase 4：projectId-keyed 隔离 + per-project 写锁；DB/Blob 留 Phase 5）。
 const ROOT = path.join(process.cwd(), '.data', 'projects');
@@ -11,6 +11,7 @@ const projDir = (id: string) => path.join(ROOT, id);
 const assetsDir = (id: string) => path.join(projDir(id), 'assets');
 const attachmentsDir = (id: string) => path.join(projDir(id), 'attachments');
 const runsDir = (id: string) => path.join(projDir(id), 'runs');
+const renderInputsDir = (id: string) => path.join(projDir(id), 'render-inputs');
 const statePath = (id: string) => path.join(projDir(id), 'state.json');
 
 /** 从工具的 experimental_context 取 projectId（由 /api/agent 注入）；非法则回退 default。 */
@@ -85,7 +86,8 @@ export function mergeBrief(id: string, patch: Record<string, unknown>): Promise<
 export async function saveAsset(
   id: string,
   bytes: Uint8Array,
-  meta: Pick<Asset, 'kind'> & Partial<Pick<Asset, 'prompt' | 'parentId' | 'inspections' | 'provider' | 'model' | 'quality' | 'size' | 'mode' | 'durationMs'>>,
+  meta: Pick<Asset, 'kind'> &
+    Partial<Pick<Asset, 'prompt' | 'parentId' | 'inspections' | 'provider' | 'model' | 'quality' | 'size' | 'mode' | 'durationMs' | 'renderInputId' | 'sourceAttachmentIds' | 'sourceAssetIds'>>,
 ): Promise<Asset> {
   const assetId = `${meta.kind}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const file = path.join(assetsDir(id), `${assetId}.png`);
@@ -101,6 +103,9 @@ export async function saveAsset(
     size: meta.size,
     mode: meta.mode,
     durationMs: meta.durationMs,
+    renderInputId: meta.renderInputId,
+    sourceAttachmentIds: meta.sourceAttachmentIds,
+    sourceAssetIds: meta.sourceAssetIds,
     path: path.relative(process.cwd(), file),
     url: `/api/assets/${assetId}?project=${id}`,
     createdAt: new Date().toISOString(),
@@ -361,6 +366,49 @@ export function finishRun(
     s.runs = [runSummary(run), ...(s.runs ?? []).filter((x) => x.id !== run.id)].slice(0, 30);
     await writeStateUnlocked(s);
   });
+}
+
+// ── RenderInputSnapshot（D32）：每次真正调用图像模型前固化输入证据链，落 render-inputs/<id>.json ──
+// 只存轻量引用（不存图片 base64）；tombstone 项目不写；与现有 per-project lock 一致串行化；JSON 格式化便于人工审计。
+const renderInputPath = (id: string, snapshotId: string) => path.join(renderInputsDir(id), `${snapshotId}.json`);
+
+export function saveRenderInputSnapshot(
+  projectId: string,
+  snapshot: Omit<RenderInputSnapshot, 'id' | 'projectId' | 'createdAt'>,
+): Promise<RenderInputSnapshot> {
+  const snap: RenderInputSnapshot = { ...snapshot, id: `render-input-${Date.now()}-${rand()}`, projectId, createdAt: new Date().toISOString() };
+  if (tombstoned.has(projectId)) return Promise.resolve(snap); // 项目已删除：不重建目录，仍返回快照对象
+  return withLock(projectId, async () => {
+    await mkdir(renderInputsDir(projectId), { recursive: true });
+    await writeFile(renderInputPath(projectId, snap.id), JSON.stringify(snap, null, 2), 'utf8');
+    return snap;
+  });
+}
+
+export async function readRenderInputSnapshot(projectId: string, snapshotId: string): Promise<RenderInputSnapshot | null> {
+  if (!/^[\w-]+$/.test(snapshotId)) return null;
+  const p = renderInputPath(projectId, snapshotId);
+  if (!existsSync(p)) return null;
+  try {
+    return JSON.parse(await readFile(p, 'utf8')) as RenderInputSnapshot;
+  } catch {
+    return null;
+  }
+}
+
+export async function listRenderInputSnapshots(projectId: string, limit = 20): Promise<RenderInputSnapshot[]> {
+  const dir = renderInputsDir(projectId);
+  if (!existsSync(dir)) return [];
+  const files = (await readdir(dir)).filter((f) => f.endsWith('.json'));
+  const snaps: RenderInputSnapshot[] = [];
+  for (const f of files) {
+    try {
+      snaps.push(JSON.parse(await readFile(path.join(dir, f), 'utf8')) as RenderInputSnapshot);
+    } catch {
+      /* 跳过解析失败的快照 */
+    }
+  }
+  return snaps.sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, Math.max(0, limit));
 }
 
 // ── 对话历史持久化（Phase 4 补：useChat messages 原本只在内存，切项目即丢）──

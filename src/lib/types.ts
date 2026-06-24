@@ -40,6 +40,10 @@ export interface Asset {
   size?: string;
   mode?: string;
   durationMs?: number;
+  // 输入快照关联（D32）：把生成图与"这次喂给模型的输入"绑定，便于追踪/复现。
+  renderInputId?: string;
+  sourceAttachmentIds?: string[];
+  sourceAssetIds?: string[];
 }
 
 /** 成熟方案：一物多用——给用户看的方案 / 身份锁定 / 跨视图不变量 / 判图基准 */
@@ -221,4 +225,77 @@ export interface Deliverable {
   assets: DeliverableAsset[]; // 本次产出的所有图
   recommendedId: string; // 默认展示/交付哪张的 assetId
   issues?: string[]; // 客观问题（弱视角 / 失败 / 预算截断…）
+}
+
+// ── RenderInputSnapshot（D32）：每次真正调用图像模型前固化的"输入证据链" ──
+// 回答"这张图用了哪个 prompt / provider / 质量档 / 引用了哪些素材 / 基于哪个 spec·layout / 生成前有哪些规则问题"。
+// 只存轻量引用（url/path/assetId/attachmentId/prompt 文本），**绝不存图片 base64**；
+// 落 .data/projects/<id>/render-inputs/<id>.json，供开发者审计，不喂回大脑。
+export type RenderInputMode = 'concept' | 'final' | 'revise';
+export type RenderInputRefKind = 'attachment' | 'asset' | 'reference' | 'plan';
+export type RenderInputRefRole =
+  | 'brand_logo'
+  | 'style_reference'
+  | 'product_image'
+  | 'floor_plan'
+  | 'previous_render'
+  | 'layout_plan'
+  | 'other';
+
+export interface RenderInputRef {
+  id: string;
+  kind: RenderInputRefKind;
+  role: RenderInputRefRole;
+  url?: string;
+  path?: string;
+  filename?: string;
+  mediaType?: string;
+  note?: string;
+}
+
+/** booth-rules 的 BoothRuleIssue 的轻量镜像（避免 types ← booth-rules 循环依赖）。 */
+export interface BoothRuleIssueLike {
+  severity: 'blocker' | 'fail' | 'warning';
+  code: string;
+  message: string;
+  suggestedFix?: string;
+}
+
+export type RenderInputOperation = 'text-to-image' | 'image-edit' | 'plan-conditioned' | 'view-generation' | 'revision';
+
+export interface RenderInputSnapshot {
+  id: string;
+  projectId: string;
+  runId?: string | null;
+
+  mode: RenderInputMode;
+  provider: string;
+  model: string;
+  quality?: string;
+  size?: string;
+
+  prompt: string; // 最终送给 provider 的完整 prompt（已含 identity + render style anchor）
+  intent?: string; // 大脑传入的中文意图
+  view?: string; // 多视角时的视角
+  operation: RenderInputOperation;
+
+  specSummary?: {
+    hasSpec: boolean;
+    identity?: string;
+    invariants?: string[];
+    selfCheckCriteria?: string;
+    updatedAt?: string;
+  };
+
+  layoutSummary?: {
+    status?: LayoutDecisionStatus;
+    planAssetId?: string;
+    proposal?: BoothLayout;
+  };
+
+  refs: RenderInputRef[];
+
+  ruleIssues?: BoothRuleIssueLike[];
+
+  createdAt: string;
 }

@@ -2,11 +2,11 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import { MAX_PARALLEL_IMAGES, MODEL_IDS, withRenderStyle } from '@/models/gateway';
 import { imageProvider, resolveActiveImageProvider } from '@/models/image-providers';
-import { checkBoothLayout, failMessages, hasBlocker } from '@/lib/booth-rules';
-import { addInspection, appendRunEvent, loadAssetBytes, markLayoutConfirmed, projectIdFromContext, readState, recordRunDeliverable, runIdFromContext, saveAsset } from '@/lib/storage';
+import { checkBoothLayout, failMessages, hasBlocker, type BoothRuleIssue } from '@/lib/booth-rules';
+import { addInspection, appendRunEvent, loadAssetBytes, markLayoutConfirmed, projectIdFromContext, readState, recordRunDeliverable, runIdFromContext, saveAsset, saveRenderInputSnapshot } from '@/lib/storage';
 import { inspectImage, inspectConsistency, toInspectionResult, consistencyToInspectionResult } from '@/agent/inspect';
 import { writeImagePrompt } from '@/agent/prompt-writer';
-import type { Deliverable, DeliverableAsset } from '@/lib/types';
+import type { Deliverable, DeliverableAsset, RenderInputOperation, RenderInputRef } from '@/lib/types';
 
 const GATE = 70; // 进化链一致性门控（漂移图不进参考池）
 const MAX_VIEWS = 4; // 单次视角硬上限（事前预算边界）
@@ -77,13 +77,21 @@ export const render = tool({
     // 展台规则校验（final）：有布局 proposal 就跑一次纯函数规则。blocker 打回让大脑修布局；
     // blocker/fail 级消息并入交付 issues（warning 不进，避免噪音）。
     const ruleMsgs: string[] = [];
+    let ruleIssues: BoothRuleIssue[] = [];
     if (mode === 'final' && s.layout?.proposal) {
-      const ruleIssues = checkBoothLayout(s.layout.proposal, { brief: s.brief, spec: s.spec });
+      ruleIssues = checkBoothLayout(s.layout.proposal, { brief: s.brief, spec: s.spec });
       if (hasBlocker(ruleIssues)) {
         return { error: `布局存在硬性问题，请先修正布局再出最终图：${failMessages(ruleIssues).join('；')}`, code: 'LAYOUT_RULE_BLOCKER', issues: ruleIssues };
       }
       ruleMsgs.push(...failMessages(ruleIssues));
     }
+
+    // D32 输入快照：spec/layout 摘要 + 每个 provider 调用前固化一条快照（provider 失败也留证据，不存 base64）。
+    const specSummary = { hasSpec: !!s.spec, identity: s.spec?.identity, invariants: s.spec?.invariants, selfCheckCriteria: s.spec?.selfCheckCriteria, updatedAt: s.spec?.updatedAt };
+    const layoutSummary = s.layout ? { status: s.layout.status, planAssetId: s.layout.planAssetId, proposal: s.layout.proposal } : undefined;
+    const planId = effectivePlanAssetId ?? '';
+    const snapshot = (operation: RenderInputOperation, prompt: string, refs: RenderInputRef[], view?: string) =>
+      saveRenderInputSnapshot(pid, { runId, mode, provider: providerName, model: imageModel, quality: q, size, prompt, intent, view, operation, specSummary, layoutSummary, refs, ruleIssues });
 
     const plan = effectivePlanAssetId ? await loadAssetBytes(pid, effectivePlanAssetId).catch(() => null) : null;
     if (effectivePlanAssetId && !plan) return { error: `找不到平面图资产 ${effectivePlanAssetId}` };
@@ -99,6 +107,8 @@ export const render = tool({
       const instr = withRenderStyle(
         `${identity}\n\nThe attached image is a TOP-DOWN FLOOR PLAN of this exhibition booth — each labeled block is a functional zone at its real position and size. Render a photorealistic 3D booth that EXACTLY follows this floor plan (every zone's position, footprint, size and shape must match, including L-shaped counters). ${frontPrompt}`,
       );
+      const planRef: RenderInputRef = { id: planId, kind: 'plan', role: 'floor_plan', url: `/api/assets/${planId}?project=${pid}` };
+      const snap = await snapshot('plan-conditioned', instr, [planRef]);
       const t0 = Date.now();
       const raw = (await Promise.all(Array.from({ length: nn }, () => imageProvider.editFromRefs([plan], instr, { quality: q, size }).catch(() => null)))).filter(
         (b): b is Uint8Array => b !== null,
@@ -107,13 +117,14 @@ export const render = tool({
       totalGenMs += genMs;
       if (!raw.length) return { error: '主图生成失败（按平面图）' };
       for (const b of raw) {
-        const a = await saveAsset(pid, b, { kind: 'booth-image', prompt: 'plan-conditioned front', parentId: effectivePlanAssetId, provider: providerName, model: imageModel, quality: q, size, mode, durationMs: genMs });
+        const a = await saveAsset(pid, b, { kind: 'booth-image', prompt: 'plan-conditioned front', parentId: effectivePlanAssetId, provider: providerName, model: imageModel, quality: q, size, mode, durationMs: genMs, renderInputId: snap.id, sourceAssetIds: planId ? [planId] : [] });
         const insp = await inspectImage(b, criteria);
         await addInspection(pid, a.id, toInspectionResult(insp, MODEL_IDS.inspect));
         heroCands.push({ bytes: b, assetId: a.id, url: a.url, score: insp.score, failN: insp.fails.length });
       }
     } else {
       const full = withRenderStyle(`${identity}\n\n${frontPrompt}`);
+      const snap = await snapshot('text-to-image', full, []);
       const t0 = Date.now();
       const raw = (await Promise.all(Array.from({ length: nn }, () => imageProvider.textToImage(full, { quality: q, size }).catch(() => null)))).filter(
         (b): b is Uint8Array => b !== null,
@@ -122,7 +133,7 @@ export const render = tool({
       totalGenMs += genMs;
       if (!raw.length) return { error: '主图生成失败（无返回）' };
       for (const b of raw) {
-        const a = await saveAsset(pid, b, { kind: 'booth-image', prompt: frontPrompt, provider: providerName, model: imageModel, quality: q, size, mode, durationMs: genMs });
+        const a = await saveAsset(pid, b, { kind: 'booth-image', prompt: frontPrompt, provider: providerName, model: imageModel, quality: q, size, mode, durationMs: genMs, renderInputId: snap.id });
         const insp = await inspectImage(b, criteria);
         await addInspection(pid, a.id, toInspectionResult(insp, MODEL_IDS.inspect));
         heroCands.push({ bytes: b, assetId: a.id, url: a.url, score: insp.score, failN: insp.fails.length });
@@ -151,10 +162,13 @@ export const render = tool({
     const assets: DeliverableAsset[] = [{ assetId: hero.assetId, url: hero.url, role: 'hero', status: 'recommended', score: hero.score }];
     const issues: string[] = [];
     const refPool: Uint8Array[] = plan ? [plan, hero.bytes] : [hero.bytes];
+    const heroRef: RenderInputRef = { id: hero.assetId, kind: 'asset', role: 'previous_render', url: hero.url };
+    const refMeta: RenderInputRef[] = plan ? [{ id: planId, kind: 'plan', role: 'floor_plan', url: `/api/assets/${planId}?project=${pid}` }, heroRef] : [heroRef];
     for (const view of views) {
       const instr = withRenderStyle(
         `${identity}\n\nUsing the attached reference image(s) of THIS exact exhibition booth, render the SAME booth from ${view}. Keep every structural part, material, color, brand placement, furniture COUNT and lighting identical to the reference(s); only the camera viewpoint changes — do NOT add, remove, move or redesign anything.`,
       );
+      const snap = await snapshot('view-generation', instr, refMeta.slice(), view);
       const t0 = Date.now();
       const cands = (await Promise.all(Array.from({ length: nn }, () => imageProvider.editFromRefs(refPool, instr, { quality: q, size }).catch(() => null)))).filter(
         (b): b is Uint8Array => b !== null,
@@ -169,10 +183,13 @@ export const render = tool({
       const judged = await Promise.all(cands.map(async (b) => ({ b, c: await inspectConsistency(hero.bytes, b, view) })));
       judged.sort((x, y) => y.c.consistencyScore - x.c.consistencyScore);
       const best = judged[0];
-      const a = await saveAsset(pid, best.b, { kind: 'booth-image', prompt: `${view} (ref-conditioned)`, parentId: hero.assetId, provider: providerName, model: imageModel, quality: q, size, mode, durationMs: genMs });
+      const a = await saveAsset(pid, best.b, { kind: 'booth-image', prompt: `${view} (ref-conditioned)`, parentId: hero.assetId, provider: providerName, model: imageModel, quality: q, size, mode, durationMs: genMs, renderInputId: snap.id, sourceAssetIds: refMeta.map((r) => r.id).filter(Boolean) });
       await addInspection(pid, a.id, consistencyToInspectionResult(best.c, view, GATE, MODEL_IDS.inspect));
       const passed = best.c.sameBooth && best.c.consistencyScore >= GATE;
-      if (passed) refPool.push(best.b); // 门控：只有通过的进参考池，防漂移传染
+      if (passed) {
+        refPool.push(best.b); // 门控：只有通过的进参考池，防漂移传染
+        refMeta.push({ id: a.id, kind: 'asset', role: 'previous_render', url: a.url }); // 通过的视角进 refMeta，后续视角快照可追踪
+      }
       assets.push({ assetId: a.id, url: a.url, role: 'view', view, status: passed ? 'ok' : 'weak', score: best.c.consistencyScore });
       if (!passed) issues.push(`${view}：一致性偏弱(${best.c.consistencyScore}<${GATE})，可 revise 或重出`);
     }

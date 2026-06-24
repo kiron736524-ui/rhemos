@@ -1,6 +1,6 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { projectIdFromContext, readState } from '@/lib/storage';
+import { listRenderInputSnapshots, projectIdFromContext, readState } from '@/lib/storage';
 
 export const readProjectState = tool({
   description:
@@ -11,6 +11,19 @@ export const readProjectState = tool({
   execute: async (_args, opts) => {
     const pid = projectIdFromContext((opts as { experimental_context?: unknown }).experimental_context);
     const s = await readState(pid);
+    // 最近 render input 快照的**轻量摘要**（D32）：不回完整 prompt/identity/refs，防上下文膨胀；
+    // 完整快照只在 .data/projects/<id>/render-inputs/ 供开发者审计，不喂回大脑。
+    const recentRenderInputs = (await listRenderInputSnapshots(pid, 5)).map((r) => ({
+      id: r.id,
+      mode: r.mode,
+      operation: r.operation,
+      provider: r.provider,
+      model: r.model,
+      quality: r.quality,
+      size: r.size,
+      refCount: r.refs.length,
+      createdAt: r.createdAt,
+    }));
     return {
       projectId: pid,
       brief: s.brief,
@@ -19,6 +32,7 @@ export const readProjectState = tool({
       assetCount: s.assets.length,
       attachmentCount: s.attachments?.length ?? 0,
       recentRuns: (s.runs ?? []).slice(0, 5),
+      recentRenderInputs,
       // 瘦身（D26）：不回传长 prompt 与全部判图史，只给最近一次判图摘要，抗大脑上下文膨胀。
       assets: s.assets.map((a) => {
         const last = a.inspections?.[a.inspections.length - 1];
