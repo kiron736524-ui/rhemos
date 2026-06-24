@@ -112,16 +112,45 @@ export interface DesignSpec {
   updatedAt: string;
 }
 
-export type LayoutZoneType = 'led' | 'stage' | 'brand' | 'reception' | 'meeting' | 'storage' | 'product' | 'plant' | 'aisle';
+export type LayoutZoneType =
+  | 'led'
+  | 'screen'
+  | 'stage'
+  | 'brand'
+  | 'wall'
+  | 'reception'
+  | 'counter'
+  | 'meeting'
+  | 'storage'
+  | 'product'
+  | 'showcase'
+  | 'table'
+  | 'chair'
+  | 'totem'
+  | 'truss'
+  | 'door'
+  | 'plant'
+  | 'aisle';
 export type LayoutOpening = 'front' | 'back' | 'left' | 'right';
+export type LayoutShape = 'rect' | 'l' | 'circle' | 'capsule' | 'line';
+export type LayoutLayer = 'space' | 'object' | 'detail';
+export type LayoutFacing = LayoutOpening | 'center';
 
 export interface BoothLayoutZone {
+  id?: string;
   name: string;
   type?: LayoutZoneType;
+  shape?: LayoutShape;
   x: number;
   y: number;
   w: number;
   h: number;
+  height?: number;
+  facing?: LayoutFacing;
+  material?: string;
+  description?: string;
+  layer?: LayoutLayer;
+  parentId?: string;
   note?: string;
 }
 

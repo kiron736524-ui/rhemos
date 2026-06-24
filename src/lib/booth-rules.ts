@@ -30,11 +30,11 @@ export interface BoothRuleContext {
 }
 
 // 主视觉 / 展示类（构成"真正的展台"）
-const DISPLAY_TYPES = new Set(['led', 'brand', 'product', 'stage']);
+const DISPLAY_TYPES = new Set(['led', 'screen', 'brand', 'product', 'showcase', 'stage', 'totem']);
 // 高体量 / 封闭类（不应阻断动线或占住开口）
-const BULKY_TYPES = new Set(['meeting', 'storage', 'brand']);
+const BULKY_TYPES = new Set(['meeting', 'storage', 'brand', 'wall']);
 // 关键区（彼此严重重叠即判错）
-const KEY_TYPES = new Set(['led', 'brand', 'product', 'reception', 'meeting', 'storage', 'stage']);
+const KEY_TYPES = new Set(['led', 'screen', 'brand', 'wall', 'product', 'showcase', 'reception', 'counter', 'meeting', 'storage', 'stage']);
 
 const area = (z: BoothLayoutZone) => Math.max(0, z.w) * Math.max(0, z.h);
 const footprint = (l: BoothLayout) => Math.max(0, l.length) * Math.max(0, l.width);
@@ -206,7 +206,7 @@ export function checkBoothLayout(layout: BoothLayout, ctx: BoothRuleContext = {}
     // 规则 5：一面开 / 三面开必须能看出背墙 / 主视觉墙倾向（贴某条封闭边的 brand/led）
     if (openings.length === 1 || openings.length === 3) {
       const closed = closedEdges(openings);
-      const hasBackWall = zones.some((z) => (z.type === 'brand' || z.type === 'led') && closed.some((e) => hugsEdge(z, layout, e)));
+      const hasBackWall = zones.some((z) => (z.type === 'brand' || z.type === 'led' || z.type === 'screen' || z.type === 'wall') && closed.some((e) => hugsEdge(z, layout, e)));
       if (!hasBackWall) {
         push({
           severity: 'warning',
@@ -222,7 +222,7 @@ export function checkBoothLayout(layout: BoothLayout, ctx: BoothRuleContext = {}
   // ── 规则 3 / 4 / 8 / 12：开口与中心相关 ──
   for (const z of zones) {
     // 规则 3：接待台不应大面积压在开放边入口正中
-    if (z.type === 'reception') {
+    if (z.type === 'reception' || z.type === 'counter') {
       for (const e of openings) {
         if (hugsEdge(z, layout, e) && centeredOnEdge(z, layout, e)) {
           const frac = edgeSpanFrac(z, layout, e);

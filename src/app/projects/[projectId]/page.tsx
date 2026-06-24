@@ -242,20 +242,48 @@ function Prose({ children }: { children: string }) {
 }
 
 /* ── 数据驱动的展台俯视平面图渲染器（大脑只出结构化数据，精致渲染交给代码）── */
-type Zone = { name: string; type?: string; x: number; y: number; w: number; h: number; note?: string };
+type Zone = {
+  id?: string;
+  name: string;
+  type?: string;
+  shape?: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  note?: string;
+  height?: number;
+  facing?: string;
+  material?: string;
+  description?: string;
+  layer?: string;
+  parentId?: string;
+};
 type BoothLayout = { length: number; width: number; openings?: string[]; facing?: string; zones: Zone[] };
 
 const LAYOUT_OPENINGS = new Set(['front', 'back', 'left', 'right']);
-const LAYOUT_ZONE_TYPES = new Set(['led', 'stage', 'brand', 'reception', 'meeting', 'storage', 'product', 'plant', 'aisle']);
+const LAYOUT_ZONE_TYPES = new Set(['led', 'screen', 'stage', 'brand', 'wall', 'reception', 'counter', 'meeting', 'storage', 'product', 'showcase', 'table', 'chair', 'totem', 'truss', 'door', 'plant', 'aisle']);
+const LAYOUT_SHAPES = new Set(['rect', 'l', 'circle', 'capsule', 'line']);
+const LAYOUT_FACINGS = new Set(['front', 'back', 'left', 'right', 'center']);
+const LAYOUT_LAYERS = new Set(['space', 'object', 'detail']);
 
 const ZONE_STYLE: Record<string, { fill: string; stroke: string }> = {
   led: { fill: '#CFE8FF', stroke: '#2B7DB8' },
+  screen: { fill: '#CFE8FF', stroke: '#2B7DB8' },
   stage: { fill: '#E4F2FF', stroke: '#2B7DB8' },
   brand: { fill: '#FFE1DD', stroke: '#C23A31' },
+  wall: { fill: '#E9ECF2', stroke: '#344054' },
   reception: { fill: '#EEF2F7', stroke: '#667085' },
+  counter: { fill: '#EEF2F7', stroke: '#667085' },
   meeting: { fill: '#D8DEE8', stroke: '#4B5563' },
   storage: { fill: '#C7CEDA', stroke: '#344054' },
   product: { fill: '#E8ECF3', stroke: '#667085' },
+  showcase: { fill: '#F4F6FA', stroke: '#667085' },
+  table: { fill: '#FFF4CC', stroke: '#B7791F' },
+  chair: { fill: '#FFF7E6', stroke: '#B7791F' },
+  totem: { fill: '#FDE4E0', stroke: '#C23A31' },
+  truss: { fill: '#E6F4FF', stroke: '#2B7DB8' },
+  door: { fill: '#FFFFFF', stroke: '#344054' },
   plant: { fill: '#DFF3E5', stroke: '#398A56' },
   aisle: { fill: '#FFFFFF', stroke: '#B9C4D2' },
   default: { fill: '#E5E7EB', stroke: '#667085' },
@@ -297,11 +325,23 @@ function FloorPlan({ layout }: { layout: BoothLayout }) {
         const st = ZONE_STYLE[z.type ?? 'default'] ?? ZONE_STYLE.default;
         const cx = X(z.x) + (z.w * s) / 2,
           cy = Y(z.y) + (z.h * s) / 2;
+        const shape = z.shape === 'l' || z.shape === 'circle' || z.shape === 'capsule' || z.shape === 'line' ? z.shape : 'rect';
+        const zw = Math.max(0, z.w * s);
+        const zh = Math.max(0, z.h * s);
+        const label = `${z.id ? `${z.id} · ` : ''}${z.name}`;
         return (
           <g key={i}>
-            <rect x={X(z.x)} y={Y(z.y)} width={Math.max(0, z.w * s)} height={Math.max(0, z.h * s)} fill={st.fill} stroke={st.stroke} strokeWidth={1} rx={2} />
+            {shape === 'circle' ? (
+              <ellipse cx={cx} cy={cy} rx={zw / 2} ry={zh / 2} fill={st.fill} stroke={st.stroke} strokeWidth={1} />
+            ) : shape === 'capsule' ? (
+              <rect x={X(z.x)} y={Y(z.y)} width={zw} height={zh} fill={st.fill} stroke={st.stroke} strokeWidth={1} rx={Math.min(zw, zh) / 2} />
+            ) : shape === 'line' ? (
+              <line x1={X(z.x)} y1={cy} x2={X(z.x) + zw} y2={cy} stroke={st.stroke} strokeWidth={Math.max(2, zh)} strokeLinecap="round" />
+            ) : (
+              <rect x={X(z.x)} y={Y(z.y)} width={zw} height={zh} fill={st.fill} stroke={st.stroke} strokeWidth={1} rx={2} />
+            )}
             <text x={cx} y={z.note ? cy - 2 : cy + 3} textAnchor="middle" fontSize={8.5} fill="#111827" fontWeight={700}>
-              {z.name}
+              {label}
             </text>
             {z.note && (
               <text x={cx} y={cy + 9} textAnchor="middle" fontSize={7.2} fill="#475467" fontWeight={600}>
@@ -612,7 +652,23 @@ export default function Workbench() {
     setEditor({
       footprint: { length: layout.length, width: layout.width },
       openings: layout.openings,
-      modules: (layout.zones || []).map((z, i) => ({ id: 'z' + i, name: z.name, type: z.type || 'default', shape: 'rect' as const, x: z.x, y: z.y, w: z.w, h: z.h, note: z.note })),
+      modules: (layout.zones || []).map((z, i) => ({
+        id: z.id || `O${i + 1}`,
+        name: z.name,
+        type: z.type || 'default',
+        shape: z.shape === 'l' || z.shape === 'circle' || z.shape === 'capsule' || z.shape === 'line' ? z.shape : 'rect',
+        x: z.x,
+        y: z.y,
+        w: z.w,
+        h: z.h,
+        note: z.note,
+        height: z.height,
+        facing: LAYOUT_FACINGS.has(z.facing ?? '') ? (z.facing as LayoutModule['facing']) : undefined,
+        material: z.material,
+        description: z.description,
+        layer: LAYOUT_LAYERS.has(z.layer ?? '') ? (z.layer as LayoutModule['layer']) : undefined,
+        parentId: z.parentId,
+      })),
     });
   };
   // 编辑器确认：截图存为 reference 资产 → 发消息让大脑用 render（planAssetId）按它出图
@@ -628,10 +684,18 @@ export default function Workbench() {
       zones: modules.map((m) => ({
         name: m.name.trim() || '功能区',
         ...(LAYOUT_ZONE_TYPES.has(m.type) ? { type: m.type } : {}),
+        ...(LAYOUT_SHAPES.has(String(m.shape).toLowerCase()) ? { shape: String(m.shape).toLowerCase() } : {}),
         x: m.x,
         y: m.y,
         w: m.w,
         h: m.h,
+        ...(m.id?.trim() ? { id: m.id.trim() } : {}),
+        ...(m.height != null ? { height: m.height } : {}),
+        ...(m.facing && LAYOUT_FACINGS.has(m.facing) ? { facing: m.facing } : {}),
+        ...(m.material?.trim() ? { material: m.material.trim() } : {}),
+        ...(m.description?.trim() ? { description: m.description.trim() } : {}),
+        ...(m.layer && LAYOUT_LAYERS.has(m.layer) ? { layer: m.layer } : {}),
+        ...(m.parentId?.trim() ? { parentId: m.parentId.trim() } : {}),
         ...(m.note?.trim() ? { note: m.note.trim() } : {}),
       })),
     };

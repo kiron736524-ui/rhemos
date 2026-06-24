@@ -37,7 +37,7 @@ function layoutLabelIssues(label: string, detail: string | undefined, layout: Bo
 
 export const presentChoices = tool({
   description:
-    '结构化卡片提问（**所有需要用户拍板的澄清都走这个，不要输出纯文字问题**）：一次只问 1 个会改骨架的问题。用户点选后，你必须 read_project_state/结合该选择重新思考，再生成下一个问题或布局。每个布局相关选项**应带结构化 layout 数据**（轮廓 + 功能区位置/尺寸/类型），前端自动渲染成精致俯视平面图，让用户看着结构选。先在 locked 里列已锁定的（让用户安心），再问当前最关键的 1 个硬核问题，并给 recommended 下标。绝不要把相互依赖的 2-3 个布局问题并列抛出。',
+    '结构化卡片提问（**所有需要用户拍板的澄清都走这个，不要输出纯文字问题**）：一次只问 1 个会改骨架的问题。用户点选后，你必须 read_project_state/结合该选择重新思考，再生成下一个问题或布局。每个布局相关选项**应带对象级 layout 数据**（轮廓 + 真实展台对象位置/尺寸/类型/形状/高度/朝向/说明），前端自动渲染成精致俯视平面图，让用户看着结构选。先在 locked 里列已锁定的（让用户安心），再问当前最关键的 1 个硬核问题，并给 recommended 下标。绝不要把相互依赖的 2-3 个布局问题并列抛出，也不要只给抽象大方块。',
   inputSchema: z.object({
     intro: z.string().optional().describe('一句话背景/开场（可选）'),
     locked: z.array(z.string()).optional().describe('已锁定、不再问的要点（让用户安心，体现"信息密度克制"）'),
@@ -54,7 +54,7 @@ export const presentChoices = tool({
                 detail: z.string().optional().describe('选项说明 + designImpact（选了会怎样）'),
                 layout: boothLayoutSchema
                   .optional()
-                  .describe('结构化俯视布局数据，前端 FloorPlan 渲染器自动画成精致平面图（真实比例+尺寸标注+网格+配色）。布局类选项一律用它，绝不输出原始 SVG/HTML。'),
+                  .describe('对象级俯视布局数据，前端 FloorPlan 渲染器自动画成精致平面图（真实比例+尺寸标注+网格+配色）。布局类选项一律用它，绝不输出原始 SVG/HTML；尽量包含墙体、屏幕、接待、展柜、洽谈、储物、通道等具体对象。'),
               }),
             )
             .min(2)

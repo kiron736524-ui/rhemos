@@ -16,15 +16,25 @@ const LAYOUT_EDGES: LayoutOpening[] = ['back', 'front', 'left', 'right'];
 const EDGE_LABEL: Record<LayoutOpening, string> = { back: 'BACK/top long side', front: 'FRONT/main aisle long side', left: 'LEFT short side', right: 'RIGHT short side' };
 const ZONE_TYPE_LABEL: Record<string, string> = {
   led: 'LED / main visual wall',
+  screen: 'screen / display surface',
   stage: 'stage / presentation area',
   brand: 'brand wall or brand surface',
+  wall: 'wall / vertical partition',
   reception: 'reception counter',
+  counter: 'counter / service desk',
   meeting: 'meeting room / talk area',
   storage: 'storage / back-of-house',
   product: 'product display',
+  showcase: 'glass showcase / product cabinet',
+  table: 'table',
+  chair: 'chair',
+  totem: 'slim freestanding totem / signage board',
+  truss: 'vertical truss column',
+  door: 'door / opening',
   plant: 'planting / soft divider',
   aisle: 'open circulation aisle',
 };
+const SHAPE_LABEL: Record<string, string> = { rect: 'rectangle', l: 'L-shaped footprint', circle: 'circle/ellipse', capsule: 'rounded capsule', line: 'linear strip' };
 const fmtM = (n: number) => `${Number.isInteger(n) ? n : Number(n.toFixed(2))}m`;
 
 const edgeLength = (layout: BoothLayout, edge: LayoutOpening) => (edge === 'back' || edge === 'front' ? layout.length : layout.width);
@@ -45,11 +55,25 @@ function layoutConstraintText(layout?: BoothLayout): string {
   const closed = LAYOUT_EDGES.filter((edge) => !open.has(edge));
   const zones = layout.zones
     .map((z, idx) => {
-      const id = String.fromCharCode(65 + idx);
+      const id = z.id || String.fromCharCode(65 + idx);
       const xr = `${fmtM(z.x)}-${fmtM(z.x + z.w)}`;
       const yr = `${fmtM(z.y)}-${fmtM(z.y + z.h)}`;
       const kind = z.type ? ZONE_TYPE_LABEL[z.type] ?? z.type : 'functional zone';
-      return `${id}. ${z.name} (${kind}): x=${xr}, y=${yr}, size=${fmtM(z.w)} x ${fmtM(z.h)}, touches=${touchingEdges(layout, z)}${z.note ? `, note=${z.note}` : ''}.`;
+      const parts = [
+        `${id}. ${z.name} (${kind})`,
+        `shape=${z.shape ? SHAPE_LABEL[z.shape] ?? z.shape : 'rectangle'}`,
+        `layer=${z.layer ?? 'space/object'}`,
+        `x=${xr}`,
+        `y=${yr}`,
+        `plan size=${fmtM(z.w)} x ${fmtM(z.h)}`,
+        `touches=${touchingEdges(layout, z)}`,
+      ];
+      if (z.height != null) parts.push(`height=${fmtM(z.height)}`);
+      if (z.facing) parts.push(`facing=${z.facing}`);
+      if (z.material) parts.push(`material=${z.material}`);
+      if (z.note) parts.push(`note=${z.note}`);
+      if (z.description) parts.push(`description=${z.description}`);
+      return `${parts.join(', ')}.`;
     })
     .join('\n');
   return `STRUCTURED FLOOR PLAN HARD LOCK:
@@ -57,7 +81,7 @@ Coordinate system is metric and top-down. Origin (0,0) is the BACK-LEFT corner o
 Outer footprint must be one strict rectangle: ${fmtM(layout.length)} x ${fmtM(layout.width)}. Open edges: ${openings.length ? openings.map((e) => `${EDGE_LABEL[e]} (${fmtM(edgeLength(layout, e))})`).join('; ') : 'none stated'}. Closed/wall-adjacent edges: ${closed.map((e) => `${EDGE_LABEL[e]} (${fmtM(edgeLength(layout, e))})`).join('; ') || 'none'}.
 Functional zones, exact positions:
 ${zones}
-Use this structured table as the source of truth. The attached PNG floor plan is only a visual diagram of the same data. Do not swap left/right, do not move zones to another edge, do not turn the rectangular footprint into a polygon, and do not invent extra walls or protrusions. Interior standees/totems are slim freestanding rectangles inside these coordinates only.`;
+Use this structured object table as the source of truth. The attached PNG floor plan is only a visual diagram of the same data. Respect every object ID, type, shape, height, facing direction, material, and description. Do not merge unrelated objects into one blob, do not swap left/right, do not move objects to another edge, do not turn the rectangular footprint into a polygon, and do not invent extra walls or protrusions. Interior standees/totems are slim freestanding rectangles inside these coordinates only.`;
 }
 
 // 唯一生图入口（首稿候选 / 用户选定基准后的多视角 / 平面图条件化）。大脑只给中文意图，

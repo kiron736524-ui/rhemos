@@ -133,13 +133,15 @@ source: 重组自旧 rhemax tasks/design-dialogue.md + tasks/brief-intake-router
 
 1-10 必须到位才算信息足以写 DesignSpec：① 空间类型与展台属性 ② 高度体系 ③ 顶部结构 ④ 顶部中部造型 ⑤ 主体分区(3-4功能区) ⑥ 产品摆放与动线 ⑦ 品牌资产与落位 ⑧ 主视觉面 ⑨ 风格定性 ⑩ 色彩关系。⑪ 材料/灯光/镜头可自动填充；跨度安全永远后台自校正。
 
-## 九、布局草图：填**结构化数据**，别手画 SVG
+## 九、布局草图：填**对象级结构化数据**，别手画 SVG
 
-布局类选项要配俯视草图，但你**不要手画 SVG**（模型估坐标不准、样式乱、不精致）。改为填 present_choices 选项的 **`layout` 结构化数据**——前端 FloorPlan 渲染器会自动画成精致平面图（真实比例 + 尺寸标注 + 米格 + 配色 + 开口虚线 + 朝向）。你只负责"哪个区多大、放哪、几面开"：
+布局类选项要配俯视草图，但你**不要手画 SVG**（模型估坐标不准、样式乱、不精致）。改为填 present_choices / present_layout 的 **`layout` 结构化数据**——前端 FloorPlan / LayoutEditor 会自动画成精致平面图（真实比例 + 尺寸标注 + 米格 + 配色 + 开口虚线 + 朝向）。你不只是画“区域大方块”，而是要给出真实展台对象：
 - `length`/`width`：footprint 长/短边（米）。
 - `openings`：开口的边（`front` 前/主通道侧、`back` 后/主墙侧、`left`/`right`），开口边自动画虚线。
 - `facing`：主视觉/正面朝向（如 "主视觉朝前"）。
-- `zones[]`：每个功能区 `{name, type, x, y, w, h, note}`——**坐标原点在左上角**（上边=back 主墙侧、下边=front 主通道侧），x 沿长边、y 沿短边，单位米；`type` 决定配色（led/stage 蓝、brand 红、meeting/storage 深块、reception/product 灰、plant 绿、aisle 通道）；`note` 放面积/数量（"12㎡"、"5台电视"、"6-8人"）。
-- **务必让 zones 贴合 footprint、尽量不重叠、像真平面图**；同一问题的多个选项布局拓扑要**明显不同**（中心塔 vs 贴边主墙 vs 双岛分区，一眼可辨）。
+- `zones[]`：每个对象 `{id, name, type, shape, x, y, w, h, height, facing, material, description, layer, note}`——**坐标原点在左上角**（上边=back 主墙侧、下边=front 主通道侧），x 沿长边、y 沿短边，单位米。`id` 必须稳定（如 A1/B2/C1），文本方案用同一 ID 指代；`shape` 可用 rect/l/circle/capsule/line；`layer` 用 space/object/detail。
+- **第一次布局顺序**：先定开口与主通道 → 再定背墙/主视觉面 → 再放高体量（会议室/储物/墙体）→ 再放接待与产品体验 → 最后补家具/立牌/绿植/Truss柱/通道留白。不要反过来先堆家具。
+- **必须包含真实对象**：主视觉墙/LED 或品牌面、接待台、产品/体验载体、洽谈或储物、通道留白；根据项目补展柜、立牌、Truss柱、桌椅、门。不要只给“产品区/洽谈区/舞台区”几个抽象块。
+- **务必让对象贴合 footprint、尽量不重叠、像真平面图**；同一问题的多个选项布局拓扑要**明显不同**（中心塔 vs 贴边主墙 vs 双岛分区，一眼可辨）。
 - **文字语义必须和 layout 一致**：`length` 是长边、`width` 是短边；15×12 时 `back/front` 是 15m 长边，`left/right` 是 12m 短边。不要出现"短边封闭"却把 `openings` 写成关闭 back/front 的卡片；这种卡片会被工具层拒绝。
 - **依赖式布局选择必须顺序化**：背墙位置、舞台朝向、储物/洽谈藏哪、5 屏形式等会互相改变平面图的问题，不能在同一轮并列让用户选。先问一个，收到选择后把已选项写进下一张 layout，再问下一项。

@@ -9,7 +9,7 @@ import { projectIdFromContext, saveLayoutProposal } from '@/lib/storage';
 // 非阻塞透传:execute 纯透传,前端据此弹编辑器。
 export const presentLayout = tool({
   description:
-    '**方案写好(update_spec)后调用**:把方案的俯视布局推给前端,前端会自动弹出布局编辑器让用户拖拽精调(位置/尺寸/L 形)。layout 填结构化布局(轮廓 + 各功能区位置/尺寸/类型,米制),前端据此初始化编辑器。用户随后会发来"已用布局编辑器定稿平面图(参考资产 xxx)" → 你 render(planAssetId);或发"按原方案直接出图" → 你直接 render(给中文意图)。',
+    '**方案写好(update_spec)后调用**:把专业对象级俯视布局推给前端,前端会自动弹出布局编辑器让用户拖拽精调。layout 不要只给几个抽象大方块；必须包含真实展台对象：背墙/LED/接待台/展柜/体验台/洽谈室/储物/立牌/Truss柱/通道留白等。每个对象给稳定 id、type、shape、x/y/w/h、height、facing、material、description；文本方案要能用这些 id 指代。用户随后会发来"已用布局编辑器定稿平面图(参考资产 xxx)" → 你 render(planAssetId);或发"按原方案直接出图" → 你直接 render(给中文意图)。',
   inputSchema: z.object({
     intro: z.string().optional().describe('一句话:请用户精调这个布局(可选)'),
     layout: boothLayoutSchema.describe('俯视布局结构化数据，前端 FloorPlan / LayoutEditor 据此渲染与初始化'),
