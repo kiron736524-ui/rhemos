@@ -1,9 +1,9 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { MAX_PARALLEL_IMAGES, MODEL_IDS, withRenderStyle } from '@/models/gateway';
-import { imageProvider } from '@/models/image-providers';
+import { imageProvider, resolveActiveImageProvider } from '@/models/image-providers';
 import { checkBoothLayout, failMessages, hasBlocker } from '@/lib/booth-rules';
-import { addInspection, loadAssetBytes, markLayoutConfirmed, projectIdFromContext, readState, recordRunDeliverable, runIdFromContext, saveAsset } from '@/lib/storage';
+import { addInspection, appendRunEvent, loadAssetBytes, markLayoutConfirmed, projectIdFromContext, readState, recordRunDeliverable, runIdFromContext, saveAsset } from '@/lib/storage';
 import { inspectImage, inspectConsistency, toInspectionResult, consistencyToInspectionResult } from '@/agent/inspect';
 import { writeImagePrompt } from '@/agent/prompt-writer';
 import type { Deliverable, DeliverableAsset } from '@/lib/types';
@@ -46,6 +46,16 @@ export const render = tool({
     // schema 不设 quality/n 默认，默认在此按 mode 解析——显式传入则尊重，避免 Zod default 与系统提示打架。
     const q: 'low' | 'medium' | 'high' = quality ?? (mode === 'concept' ? 'medium' : 'high');
     const nn = n ?? (mode === 'concept' ? 1 : 2);
+    // 解析激活的图像 provider（IMAGE_PROVIDER，默认 fal）；未知/未实现在此返回清晰错误（早于生图的 .catch 包裹）。
+    let providerName: string, imageModel: string;
+    try {
+      const p = resolveActiveImageProvider();
+      providerName = p.name;
+      imageModel = p.model;
+    } catch (e) {
+      return { error: e instanceof Error ? e.message : String(e), code: 'IMAGE_PROVIDER_INVALID' };
+    }
+    let totalGenMs = 0; // 累计各批次生图墙钟，记入 run 事件
     if (views.length > MAX_VIEWS) views = views.slice(0, MAX_VIEWS);
     const requestedImages = nn * (1 + views.length);
     if (requestedImages > MAX_IMAGES_PER_RENDER) {
@@ -89,24 +99,30 @@ export const render = tool({
       const instr = withRenderStyle(
         `${identity}\n\nThe attached image is a TOP-DOWN FLOOR PLAN of this exhibition booth — each labeled block is a functional zone at its real position and size. Render a photorealistic 3D booth that EXACTLY follows this floor plan (every zone's position, footprint, size and shape must match, including L-shaped counters). ${frontPrompt}`,
       );
+      const t0 = Date.now();
       const raw = (await Promise.all(Array.from({ length: nn }, () => imageProvider.editFromRefs([plan], instr, { quality: q, size }).catch(() => null)))).filter(
         (b): b is Uint8Array => b !== null,
       );
+      const genMs = Date.now() - t0;
+      totalGenMs += genMs;
       if (!raw.length) return { error: '主图生成失败（按平面图）' };
       for (const b of raw) {
-        const a = await saveAsset(pid, b, { kind: 'booth-image', prompt: 'plan-conditioned front', parentId: effectivePlanAssetId });
+        const a = await saveAsset(pid, b, { kind: 'booth-image', prompt: 'plan-conditioned front', parentId: effectivePlanAssetId, provider: providerName, model: imageModel, quality: q, size, mode, durationMs: genMs });
         const insp = await inspectImage(b, criteria);
         await addInspection(pid, a.id, toInspectionResult(insp, MODEL_IDS.inspect));
         heroCands.push({ bytes: b, assetId: a.id, url: a.url, score: insp.score, failN: insp.fails.length });
       }
     } else {
       const full = withRenderStyle(`${identity}\n\n${frontPrompt}`);
+      const t0 = Date.now();
       const raw = (await Promise.all(Array.from({ length: nn }, () => imageProvider.textToImage(full, { quality: q, size }).catch(() => null)))).filter(
         (b): b is Uint8Array => b !== null,
       );
+      const genMs = Date.now() - t0;
+      totalGenMs += genMs;
       if (!raw.length) return { error: '主图生成失败（无返回）' };
       for (const b of raw) {
-        const a = await saveAsset(pid, b, { kind: 'booth-image', prompt: frontPrompt });
+        const a = await saveAsset(pid, b, { kind: 'booth-image', prompt: frontPrompt, provider: providerName, model: imageModel, quality: q, size, mode, durationMs: genMs });
         const insp = await inspectImage(b, criteria);
         await addInspection(pid, a.id, toInspectionResult(insp, MODEL_IDS.inspect));
         heroCands.push({ bytes: b, assetId: a.id, url: a.url, score: insp.score, failN: insp.fails.length });
@@ -127,6 +143,7 @@ export const render = tool({
       const singleIssues = [...ruleMsgs, ...(hero.failN ? [`主图有 ${hero.failN} 处客观待改`] : [])];
       const single: Deliverable = { type: 'single', assets, recommendedId: hero.assetId, ...(singleIssues.length ? { issues: singleIssues } : {}) };
       await recordRunDeliverable(pid, runId, single);
+      await appendRunEvent(pid, runId, { type: 'tool', toolName: 'render', outputSummary: { provider: providerName, model: imageModel, mode, quality: q, size, images: assets.length, durationMs: totalGenMs } });
       return single;
     }
 
@@ -138,9 +155,12 @@ export const render = tool({
       const instr = withRenderStyle(
         `${identity}\n\nUsing the attached reference image(s) of THIS exact exhibition booth, render the SAME booth from ${view}. Keep every structural part, material, color, brand placement, furniture COUNT and lighting identical to the reference(s); only the camera viewpoint changes — do NOT add, remove, move or redesign anything.`,
       );
+      const t0 = Date.now();
       const cands = (await Promise.all(Array.from({ length: nn }, () => imageProvider.editFromRefs(refPool, instr, { quality: q, size }).catch(() => null)))).filter(
         (b): b is Uint8Array => b !== null,
       );
+      const genMs = Date.now() - t0;
+      totalGenMs += genMs;
       if (!cands.length) {
         assets.push({ assetId: '', url: '', role: 'view', view, status: 'failed' });
         issues.push(`${view}：生成失败`);
@@ -149,7 +169,7 @@ export const render = tool({
       const judged = await Promise.all(cands.map(async (b) => ({ b, c: await inspectConsistency(hero.bytes, b, view) })));
       judged.sort((x, y) => y.c.consistencyScore - x.c.consistencyScore);
       const best = judged[0];
-      const a = await saveAsset(pid, best.b, { kind: 'booth-image', prompt: `${view} (ref-conditioned)`, parentId: hero.assetId });
+      const a = await saveAsset(pid, best.b, { kind: 'booth-image', prompt: `${view} (ref-conditioned)`, parentId: hero.assetId, provider: providerName, model: imageModel, quality: q, size, mode, durationMs: genMs });
       await addInspection(pid, a.id, consistencyToInspectionResult(best.c, view, GATE, MODEL_IDS.inspect));
       const passed = best.c.sameBooth && best.c.consistencyScore >= GATE;
       if (passed) refPool.push(best.b); // 门控：只有通过的进参考池，防漂移传染
@@ -159,6 +179,7 @@ export const render = tool({
     const finalIssues = [...ruleMsgs, ...issues];
     const deliverable: Deliverable = { type: plan ? 'plan-conditioned' : 'view-set', assets, recommendedId: hero.assetId, ...(finalIssues.length ? { issues: finalIssues } : {}) };
     await recordRunDeliverable(pid, runId, deliverable);
+    await appendRunEvent(pid, runId, { type: 'tool', toolName: 'render', outputSummary: { provider: providerName, model: imageModel, mode, quality: q, size, images: assets.length, durationMs: totalGenMs } });
     return deliverable;
   },
 });

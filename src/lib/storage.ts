@@ -85,7 +85,7 @@ export function mergeBrief(id: string, patch: Record<string, unknown>): Promise<
 export async function saveAsset(
   id: string,
   bytes: Uint8Array,
-  meta: Pick<Asset, 'kind'> & Partial<Pick<Asset, 'prompt' | 'parentId' | 'inspections'>>,
+  meta: Pick<Asset, 'kind'> & Partial<Pick<Asset, 'prompt' | 'parentId' | 'inspections' | 'provider' | 'model' | 'quality' | 'size' | 'mode' | 'durationMs'>>,
 ): Promise<Asset> {
   const assetId = `${meta.kind}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const file = path.join(assetsDir(id), `${assetId}.png`);
@@ -95,6 +95,12 @@ export async function saveAsset(
     prompt: meta.prompt,
     parentId: meta.parentId,
     inspections: meta.inspections,
+    provider: meta.provider,
+    model: meta.model,
+    quality: meta.quality,
+    size: meta.size,
+    mode: meta.mode,
+    durationMs: meta.durationMs,
     path: path.relative(process.cwd(), file),
     url: `/api/assets/${assetId}?project=${id}`,
     createdAt: new Date().toISOString(),

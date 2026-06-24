@@ -1,0 +1,207 @@
+[
+  {
+    "id": "9sqm-inline-basic",
+    "title": "9㎡ 小型一面开：主展示 + 接待",
+    "brief": {
+      "space": { "length": 3, "width": 3, "openSides": ["front"], "openingRelation": "unknown" },
+      "brand": { "logo": "placeholder" },
+      "functions": { "requiredZones": ["brand", "reception"] }
+    },
+    "layout": {
+      "length": 3,
+      "width": 3,
+      "openings": ["front"],
+      "zones": [
+        { "name": "品牌主墙", "type": "brand", "x": 0, "y": 0, "w": 3, "h": 0.5 },
+        { "name": "产品展示", "type": "product", "x": 0, "y": 0.8, "w": 1.6, "h": 1.4 },
+        { "name": "接待台", "type": "reception", "x": 2.2, "y": 2.3, "w": 0.7, "h": 0.6 }
+      ]
+    },
+    "expected": { "mustHaveZones": ["brand", "reception"], "warningsAllowed": true, "shouldFailRules": false }
+  },
+  {
+    "id": "18sqm-corner-basic",
+    "title": "18㎡ 双开口：品牌墙 + 产品 + 接待 + 小洽谈",
+    "brief": {
+      "space": { "length": 6, "width": 3, "openSides": ["front", "left"], "openingRelation": "corner" },
+      "functions": { "requiredZones": ["brand", "product", "reception", "meeting"] }
+    },
+    "layout": {
+      "length": 6,
+      "width": 3,
+      "openings": ["front", "left"],
+      "zones": [
+        { "name": "品牌主墙", "type": "brand", "x": 0, "y": 0, "w": 6, "h": 0.5 },
+        { "name": "产品展示", "type": "product", "x": 1, "y": 0.7, "w": 2.5, "h": 1.6 },
+        { "name": "洽谈区", "type": "meeting", "x": 4, "y": 0.7, "w": 2, "h": 2 },
+        { "name": "接待台", "type": "reception", "x": 0.2, "y": 2.4, "w": 1.2, "h": 0.5 }
+      ]
+    },
+    "expected": { "mustHaveZones": ["brand", "product", "reception"], "warningsAllowed": true, "shouldFailRules": false }
+  },
+  {
+    "id": "36sqm-corner-tech",
+    "title": "36㎡ 科技行业相邻两面开展台：完整配置",
+    "brief": {
+      "space": { "length": 6, "width": 6, "openSides": ["front", "right"], "openingRelation": "corner" },
+      "style": { "tone": "科技冷调", "primaryColor": "technology blue" },
+      "functions": { "requiredZones": ["brand", "product", "reception", "meeting", "storage"] }
+    },
+    "layout": {
+      "length": 6,
+      "width": 6,
+      "openings": ["front", "right"],
+      "zones": [
+        { "name": "品牌主墙", "type": "brand", "x": 0, "y": 0, "w": 6, "h": 0.6 },
+        { "name": "储物间", "type": "storage", "x": 0, "y": 0.6, "w": 1.2, "h": 1.2 },
+        { "name": "产品展示", "type": "product", "x": 0, "y": 2.0, "w": 3.0, "h": 2.0 },
+        { "name": "洽谈区", "type": "meeting", "x": 3.5, "y": 1.0, "w": 2.5, "h": 2.5 },
+        { "name": "接待台", "type": "reception", "x": 0, "y": 4.8, "w": 1.5, "h": 1.0 }
+      ]
+    },
+    "expected": { "mustHaveZones": ["brand", "product", "reception", "meeting"], "warningsAllowed": true, "shouldFailRules": false }
+  },
+  {
+    "id": "36sqm-passthrough",
+    "title": "36㎡ 相对两面开 pass-through：防止被当通道穿过",
+    "brief": {
+      "space": { "length": 6, "width": 6, "openSides": ["left", "right"], "openingRelation": "parallel" },
+      "functions": { "requiredZones": ["brand", "product", "reception"], "priority": ["停留点优先，接待/产品布在动线侧形成停留"] }
+    },
+    "layout": {
+      "length": 6,
+      "width": 6,
+      "openings": ["left", "right"],
+      "zones": [
+        { "name": "品牌主墙", "type": "brand", "x": 0, "y": 0, "w": 6, "h": 0.6 },
+        { "name": "产品展示", "type": "product", "x": 1, "y": 1.5, "w": 2, "h": 2.5, "note": "布在动线侧形成停留点" },
+        { "name": "洽谈区", "type": "meeting", "x": 4, "y": 1, "w": 2, "h": 2 },
+        { "name": "接待台", "type": "reception", "x": 2.5, "y": 4.5, "w": 1.5, "h": 1.0 }
+      ]
+    },
+    "expected": { "mustHaveZones": ["brand", "product", "reception"], "warningsAllowed": true, "shouldFailRules": false }
+  },
+  {
+    "id": "72sqm-peninsula",
+    "title": "72㎡ 三面开：后场主板墙 + 产品 + 洽谈 + 储物",
+    "brief": {
+      "space": { "length": 12, "width": 6, "openSides": ["front", "left", "right"], "backWall": "back" },
+      "functions": { "requiredZones": ["led", "product", "meeting", "storage"] }
+    },
+    "layout": {
+      "length": 12,
+      "width": 6,
+      "openings": ["front", "left", "right"],
+      "zones": [
+        { "name": "LED 主屏背墙", "type": "led", "x": 1, "y": 0, "w": 10, "h": 0.6 },
+        { "name": "产品展示", "type": "product", "x": 1, "y": 1, "w": 4, "h": 3 },
+        { "name": "洽谈室", "type": "meeting", "x": 9, "y": 1, "w": 2.5, "h": 3, "note": "6人洽谈室" },
+        { "name": "储物间", "type": "storage", "x": 5.5, "y": 0.7, "w": 1.5, "h": 1.2 }
+      ]
+    },
+    "expected": { "mustHaveZones": ["led", "product", "meeting", "storage"], "warningsAllowed": true, "shouldFailRules": false }
+  },
+  {
+    "id": "100sqm-island",
+    "title": "100㎡ 四面开 island：中央识别点，高墙不居中阻断",
+    "brief": {
+      "space": { "length": 10, "width": 10, "openSides": ["front", "back", "left", "right"] },
+      "top": { "strategy": "suspended_truss", "centerForm": "环形吊挂", "suspensionApproved": true }
+    },
+    "layout": {
+      "length": 10,
+      "width": 10,
+      "openings": ["front", "back", "left", "right"],
+      "zones": [
+        { "name": "中央 LED 识别塔", "type": "led", "x": 4, "y": 4, "w": 2, "h": 2, "note": "中央识别点，非高墙" },
+        { "name": "产品展示 A", "type": "product", "x": 0.5, "y": 0.5, "w": 3, "h": 2 },
+        { "name": "产品展示 B", "type": "product", "x": 6.5, "y": 0.5, "w": 3, "h": 2 },
+        { "name": "边缘品牌墙", "type": "brand", "x": 0, "y": 4, "w": 0.6, "h": 3 },
+        { "name": "接待台", "type": "reception", "x": 4, "y": 0, "w": 2, "h": 1 }
+      ]
+    },
+    "expected": { "mustHaveZones": ["brand", "product", "led"], "warningsAllowed": true, "shouldFailRules": false }
+  },
+  {
+    "id": "64sqm-large-product",
+    "title": "大件产品案例：设备/冰箱/摩托落地或低地台",
+    "brief": {
+      "space": { "length": 8, "width": 8, "openSides": ["front"] },
+      "products": [{ "kind": "大型设备", "scale": "large", "notes": "落地展示，10cm 低地台，不上高柜" }],
+      "functions": { "requiredZones": ["brand", "product"] }
+    },
+    "layout": {
+      "length": 8,
+      "width": 8,
+      "openings": ["front"],
+      "zones": [
+        { "name": "品牌主墙", "type": "brand", "x": 0, "y": 0, "w": 8, "h": 0.6 },
+        { "name": "大件设备区", "type": "product", "x": 1, "y": 1, "w": 4, "h": 4, "note": "大型设备落地展示，10cm 低地台" },
+        { "name": "接待台", "type": "reception", "x": 6, "y": 6, "w": 1.5, "h": 1 }
+      ]
+    },
+    "expected": { "mustHaveZones": ["brand", "product"], "warningsAllowed": true, "shouldFailRules": false }
+  },
+  {
+    "id": "48sqm-large-led",
+    "title": "大型 LED 屏案例：厚墙/结构承载语义",
+    "brief": {
+      "space": { "length": 8, "width": 6, "openSides": ["front"] },
+      "functions": { "requiredZones": ["led", "product", "reception"] },
+      "material": { "lighting": "cool white 5000K" }
+    },
+    "layout": {
+      "length": 8,
+      "width": 6,
+      "openings": ["front"],
+      "zones": [
+        { "name": "大型 LED 主屏", "type": "led", "x": 0, "y": 0, "w": 8, "h": 1.0, "note": "厚墙承载约80cm，背后检修" },
+        { "name": "产品展示", "type": "product", "x": 1, "y": 1.5, "w": 3, "h": 2.5 },
+        { "name": "接待台", "type": "reception", "x": 5.5, "y": 4.5, "w": 1.5, "h": 1 }
+      ]
+    },
+    "expected": { "mustHaveZones": ["led", "product", "reception"], "warningsAllowed": true, "shouldFailRules": false }
+  },
+  {
+    "id": "36sqm-no-top",
+    "title": "无顶部案例：靠墙体/门头/立面补偿空间感",
+    "brief": {
+      "space": { "length": 6, "width": 6, "openSides": ["front", "left"], "openingRelation": "corner" },
+      "top": { "strategy": "none" },
+      "functions": { "requiredZones": ["brand", "product"] }
+    },
+    "layout": {
+      "length": 6,
+      "width": 6,
+      "openings": ["front", "left"],
+      "zones": [
+        { "name": "高立面品牌门头", "type": "brand", "x": 0, "y": 0, "w": 6, "h": 0.8, "note": "高立面门头补偿无顶部" },
+        { "name": "产品展示", "type": "product", "x": 1, "y": 1.2, "w": 2.5, "h": 2.5 },
+        { "name": "接待台", "type": "reception", "x": 0.2, "y": 4.5, "w": 1.5, "h": 1 }
+      ]
+    },
+    "expected": { "mustHaveZones": ["brand", "product"], "warningsAllowed": true, "shouldFailRules": false }
+  },
+  {
+    "id": "96sqm-suspended-truss",
+    "title": "truss / 顶部策略案例：suspended_truss（保留数据，暂不硬规则）",
+    "brief": {
+      "space": { "length": 12, "width": 8, "openSides": ["front", "right"], "openingRelation": "corner" },
+      "top": { "strategy": "suspended_truss", "centerForm": "方形矩形灯框", "suspensionApproved": true },
+      "functions": { "requiredZones": ["brand", "led", "product", "meeting"] }
+    },
+    "layout": {
+      "length": 12,
+      "width": 8,
+      "openings": ["front", "right"],
+      "zones": [
+        { "name": "LED 主屏背墙", "type": "led", "x": 1, "y": 0, "w": 10, "h": 0.8 },
+        { "name": "品牌角墙", "type": "brand", "x": 0, "y": 0, "w": 1, "h": 0.8 },
+        { "name": "产品展示", "type": "product", "x": 1, "y": 1.2, "w": 4, "h": 3 },
+        { "name": "洽谈室", "type": "meeting", "x": 9, "y": 1.2, "w": 2.5, "h": 3, "note": "6人洽谈室" },
+        { "name": "接待台", "type": "reception", "x": 0.5, "y": 6.5, "w": 2, "h": 1 }
+      ]
+    },
+    "expected": { "mustHaveZones": ["brand", "led", "product", "meeting"], "warningsAllowed": true, "shouldFailRules": false }
+  }
+]

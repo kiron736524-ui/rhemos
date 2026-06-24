@@ -11,6 +11,7 @@
 - ✅ **工业级一致性**：identity 身份锁定 + 画风锚 + **进化式参考链**（judge 门控）+ **平面图条件化生图**（编辑器截图 → 喂模型出贴合布局的 3D）
 - ✅ 对话持久化 + **附件资产化**（上传先落 `.data/projects/<id>/attachments`，消息只存引用；发给模型前临时还原 / 提取）
 - ✅ **Run 记录 + 代码层流程守卫**：每轮 `/api/agent` 生成 runId，记录 step/tool/deliverable；final render 必须已有 spec.identity 且布局已确认或明确跳过
+- ✅ **质量闭环基础设施**：展台规则引擎单测（Vitest）+ 10 个真实案例回归集（`fixtures/booth-cases`，不调模型）+ `IMAGE_PROVIDER` 可配置（默认 fal）+ 生成耗时/供应商沉淀进 asset/run
 - ⬜ **Phase 5** 生产化（DB / auth / 成本核算 / 部署）
 
 **工作台**（`/projects/:projectId`）三栏暗色科技界面：左项目面板（列表 / 切换 / 新建 / 删除）｜ 中对话（文字 / 语音 / 上传 + **卡片选择** + markdown；交付图标"推荐"、单击放大）｜ 右资产画廊。需要拍板时大脑出**卡片 + 俯视草图**让你点选；布局可进编辑器拖拽精调 → 截图喂生图。工具过程默认隐藏（调试开关可见）。
@@ -29,12 +30,14 @@ Next.js 16 + React 19 + TypeScript + **AI SDK 6**。UI：Tailwind 4 暗色 token
 
 ## 快速开始
 ```bash
-# .env.local（已 gitignore）需要：
+# .env.local（已 gitignore；可复制 .env.example 起步）需要：
 #   AI_GATEWAY_API_KEY=...   必需，路由经 Gateway 的模型（脑/判图/写prompt/语音清理/Gemini fallback）
 #   FAL_API_KEY=...          必需，gpt-image-2 文生图 + 图编辑经 fal.ai
 #   DASHSCOPE_API_KEY=...    接 ASR 才需要（阿里云）
+#   IMAGE_PROVIDER=fal       可选，生图 provider（默认 fal；openai/seedream/gemini 为预留接口）
 npm install
 npm run dev          # → http://localhost:3000
+npm run test         # 规则引擎单测 + 案例回归（纯本地，不需 key / 不联网）
 ```
 实测脚本（验证 key / 平台能力，`node --env-file .env.local scripts/<x>.mjs`）：
 ```bash

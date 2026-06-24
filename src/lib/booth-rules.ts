@@ -197,12 +197,11 @@ export function checkBoothLayout(layout: BoothLayout, ctx: BoothRuleContext = {}
   if (!openings.length) {
     push({ severity: 'warning', code: 'OPENINGS_MISSING', message: '未标注开口边，无法推断展台类型（相邻/相对两面开、背墙朝向等）', suggestedFix: '标注开放边（front/back/left/right）' });
   } else {
-    // 规则 6：两面开区分相邻/相对（能推断则只作 evidence；推断不出才 warning）
-    if (openings.length === 2) {
-      const rel = openingRelation(openings);
-      if (rel === 'unknown') {
-        push({ severity: 'warning', code: 'OPENING_RELATION_UNCLEAR', message: '两面开但无法判断相邻(角位)还是相对(穿越)', evidence: { openings } });
-      }
+    // 规则 6：两面开必须能区分相邻(角位)/相对(穿越)。两个开口标到同一条边 → 无法判断 → warning。
+    // 正常 normalize 会去重开口，故生产路径（present-layout/choices/render 先 normalize）不会误报；
+    // 仅原始/异常数据（如 openings:["front","front"]）触发。relation 推断见 openingRelation()。
+    if (openings.length === 2 && new Set(openings).size < 2) {
+      push({ severity: 'warning', code: 'OPENING_RELATION_UNCLEAR', message: '两面开但两个开口标在同一条边，无法判断相邻(角位)还是相对(穿越)', evidence: { openings } });
     }
     // 规则 5：一面开 / 三面开必须能看出背墙 / 主视觉墙倾向（贴某条封闭边的 brand/led）
     if (openings.length === 1 || openings.length === 3) {

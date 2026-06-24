@@ -33,6 +33,13 @@ export interface Asset {
   parentId?: string; // revise 来源资产
   createdAt: string;
   inspections?: InspectionResult[];
+  // 生成元数据（可选，事项4）：provider/model/quality/size/mode/耗时，供排查与对比不同图像供应商。
+  provider?: string;
+  model?: string;
+  quality?: string;
+  size?: string;
+  mode?: string;
+  durationMs?: number;
 }
 
 /** 成熟方案：一物多用——给用户看的方案 / 身份锁定 / 跨视图不变量 / 判图基准 */

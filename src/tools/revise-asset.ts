@@ -1,8 +1,8 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { MODEL_IDS, withRenderStyle } from '@/models/gateway';
-import { imageProvider } from '@/models/image-providers';
-import { addInspection, loadAssetBytes, projectIdFromContext, readState, recordRunDeliverable, runIdFromContext, saveAsset } from '@/lib/storage';
+import { imageProvider, resolveActiveImageProvider } from '@/models/image-providers';
+import { addInspection, appendRunEvent, loadAssetBytes, projectIdFromContext, readState, recordRunDeliverable, runIdFromContext, saveAsset } from '@/lib/storage';
 import { inspectImage, toInspectionResult } from '@/agent/inspect';
 import { writeImagePrompt } from '@/agent/prompt-writer';
 import type { Deliverable } from '@/lib/types';
@@ -23,11 +23,21 @@ export const reviseAsset = tool({
     const s = await readState(pid);
     const identity = s.spec?.identity ?? '';
     const criteria = s.spec?.selfCheckCriteria || fix;
+    let providerName: string, imageModel: string;
+    try {
+      const p = resolveActiveImageProvider();
+      providerName = p.name;
+      imageModel = p.model;
+    } catch (e) {
+      return { error: e instanceof Error ? e.message : String(e), code: 'IMAGE_PROVIDER_INVALID' };
+    }
     // prompt-writer：中文 fix → 英文"只改一处、其余不变"指令
     const instruction = withRenderStyle(await writeImagePrompt({ intent: fix, identity, kind: 'revise' }));
+    const t0 = Date.now();
     const bytes = await imageProvider.editFromRefs([parentBytes], instruction);
+    const durationMs = Date.now() - t0;
     if (!bytes) return { error: '局部修复未返回图（编辑模型无输出）' };
-    const asset = await saveAsset(pid, bytes, { kind: 'booth-image', prompt: `revise: ${fix}`, parentId: parentAssetId });
+    const asset = await saveAsset(pid, bytes, { kind: 'booth-image', prompt: `revise: ${fix}`, parentId: parentAssetId, provider: providerName, model: imageModel, mode: 'revise', durationMs });
     const insp = await inspectImage(bytes, criteria);
     await addInspection(pid, asset.id, toInspectionResult(insp, MODEL_IDS.inspect));
     // 统一交付协议（D24 契约①）：单张修订图。
@@ -38,6 +48,7 @@ export const reviseAsset = tool({
       ...(insp.fails.length ? { issues: insp.fails } : {}),
     };
     await recordRunDeliverable(pid, runId, deliverable);
+    await appendRunEvent(pid, runId, { type: 'tool', toolName: 'revise_asset', outputSummary: { provider: providerName, model: imageModel, mode: 'revise', durationMs } });
     return deliverable;
   },
 });
