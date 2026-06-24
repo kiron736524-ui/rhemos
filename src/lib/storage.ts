@@ -1,7 +1,7 @@
 import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
-import type { Asset, Attachment, AttachmentKind, BoothLayout, Deliverable, DesignSpec, InspectionResult, ProjectState, ProjectSummary, RenderInputSnapshot, RunBudget, RunEvent, RunRecord, RunStatus } from './types';
+import type { Asset, AssetAnalysis, Attachment, AttachmentKind, AttachmentUseRef, BoothLayout, Deliverable, DesignSpec, InspectionResult, ProjectState, ProjectSummary, RenderInputSnapshot, RunBudget, RunEvent, RunRecord, RunStatus } from './types';
 
 // 本地文件系统存储（Phase 4：projectId-keyed 隔离 + per-project 写锁；DB/Blob 留 Phase 5）。
 const ROOT = path.join(process.cwd(), '.data', 'projects');
@@ -12,6 +12,7 @@ const assetsDir = (id: string) => path.join(projDir(id), 'assets');
 const attachmentsDir = (id: string) => path.join(projDir(id), 'attachments');
 const runsDir = (id: string) => path.join(projDir(id), 'runs');
 const renderInputsDir = (id: string) => path.join(projDir(id), 'render-inputs');
+const analysesDir = (id: string) => path.join(projDir(id), 'asset-analyses');
 const statePath = (id: string) => path.join(projDir(id), 'state.json');
 
 /** 从工具的 experimental_context 取 projectId（由 /api/agent 注入）；非法则回退 default。 */
@@ -409,6 +410,89 @@ export async function listRenderInputSnapshots(projectId: string, limit = 20): P
     }
   }
   return snaps.sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, Math.max(0, limit));
+}
+
+// ── selectedAttachments（D33）：标记本项目被选入方案/生图输入的素材（按 attachmentId+role 去重，丢弃引用不存在附件的 ref）──
+function dedupeAttachmentRefs(refs: AttachmentUseRef[]): AttachmentUseRef[] {
+  const seen = new Set<string>();
+  const out: AttachmentUseRef[] = [];
+  for (const r of refs) {
+    const k = `${r.attachmentId}::${r.role}`;
+    if (!seen.has(k)) {
+      seen.add(k);
+      out.push(r);
+    }
+  }
+  return out;
+}
+
+export function setSelectedAttachments(projectId: string, refs: AttachmentUseRef[]): Promise<void> {
+  return withLock(projectId, async () => {
+    const s = await readState(projectId);
+    const ids = new Set((s.attachments ?? []).map((a) => a.id));
+    const valid = refs.filter((r) => ids.has(r.attachmentId));
+    if (valid.length !== refs.length) console.warn(`[selectedAttachments] 丢弃 ${refs.length - valid.length} 个引用了不存在附件的 ref（${projectId}）`);
+    s.selectedAttachments = dedupeAttachmentRefs(valid);
+    await writeStateUnlocked(s);
+  });
+}
+
+export function mergeSelectedAttachments(projectId: string, refs: AttachmentUseRef[]): Promise<void> {
+  return withLock(projectId, async () => {
+    const s = await readState(projectId);
+    const ids = new Set((s.attachments ?? []).map((a) => a.id));
+    const valid = refs.filter((r) => ids.has(r.attachmentId));
+    if (valid.length !== refs.length) console.warn(`[selectedAttachments] merge 丢弃 ${refs.length - valid.length} 个无效 ref（${projectId}）`);
+    s.selectedAttachments = dedupeAttachmentRefs([...(s.selectedAttachments ?? []), ...valid]);
+    await writeStateUnlocked(s);
+  });
+}
+
+// ── AssetAnalysis（D33）：上传素材的结构化理解，落 asset-analyses/<id>.json（不存 base64；list 按 updatedAt 倒序）──
+const analysisPath = (id: string, analysisId: string) => path.join(analysesDir(id), `${analysisId}.json`);
+
+export function saveAssetAnalysis(
+  projectId: string,
+  analysis: Omit<AssetAnalysis, 'id' | 'projectId' | 'createdAt' | 'updatedAt'>,
+): Promise<AssetAnalysis> {
+  const now = new Date().toISOString();
+  const full: AssetAnalysis = { ...analysis, id: `analysis-${Date.now()}-${rand()}`, projectId, createdAt: now, updatedAt: now };
+  if (tombstoned.has(projectId)) return Promise.resolve(full);
+  return withLock(projectId, async () => {
+    await mkdir(analysesDir(projectId), { recursive: true });
+    await writeFile(analysisPath(projectId, full.id), JSON.stringify(full, null, 2), 'utf8');
+    return full;
+  });
+}
+
+export async function readAssetAnalysis(projectId: string, analysisId: string): Promise<AssetAnalysis | null> {
+  if (!/^[\w-]+$/.test(analysisId)) return null;
+  const p = analysisPath(projectId, analysisId);
+  if (!existsSync(p)) return null;
+  try {
+    return JSON.parse(await readFile(p, 'utf8')) as AssetAnalysis;
+  } catch {
+    return null;
+  }
+}
+
+export async function listAssetAnalyses(projectId: string, limit = 50): Promise<AssetAnalysis[]> {
+  const dir = analysesDir(projectId);
+  if (!existsSync(dir)) return [];
+  const files = (await readdir(dir)).filter((f) => f.endsWith('.json'));
+  const out: AssetAnalysis[] = [];
+  for (const f of files) {
+    try {
+      out.push(JSON.parse(await readFile(path.join(dir, f), 'utf8')) as AssetAnalysis);
+    } catch {
+      /* 跳过解析失败的分析 */
+    }
+  }
+  return out.sort((a, b) => (b.updatedAt || b.createdAt).localeCompare(a.updatedAt || a.createdAt)).slice(0, Math.max(0, limit));
+}
+
+export async function listAssetAnalysesForAttachment(projectId: string, attachmentId: string): Promise<AssetAnalysis[]> {
+  return (await listAssetAnalyses(projectId, 1000)).filter((a) => a.attachmentId === attachmentId);
 }
 
 // ── 对话历史持久化（Phase 4 补：useChat messages 原本只在内存，切项目即丢）──

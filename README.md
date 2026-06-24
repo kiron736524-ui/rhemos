@@ -13,6 +13,7 @@
 - ✅ **Run 记录 + 代码层流程守卫**：每轮 `/api/agent` 生成 runId，记录 step/tool/deliverable；final render 必须已有 spec.identity 且布局已确认或明确跳过
 - ✅ **质量闭环基础设施**：展台规则引擎单测（Vitest）+ 10 个真实案例回归集（`fixtures/booth-cases`，不调模型）+ `IMAGE_PROVIDER` 可配置（默认 fal）+ 生成耗时/供应商沉淀进 asset/run
 - ✅ **生图输入快照（RenderInputSnapshot）**：每次 render/revise 调模型**前**固化 prompt/provider/质量/refs/spec/layout/规则问题到 `.data/.../render-inputs/`，生成 asset 关联 `renderInputId` → 任一张图都能追溯"由哪些输入产生、能否复现"（不存 base64，不喂回大脑）
+- ✅ **用户素材分析层（AssetAnalysis）**：上传文件**自动**生成结构化分析（文件名/类型启发式 + Office/文本轻量提取，不调 vision/OCR）→ `selectedAttachments` 选材 → render 把素材引用写进快照与 asset 的 `sourceAttachmentIds`；任一张图都能追溯"引用了哪些用户素材、被理解成了什么"（分析失败不阻断上传）
 - ⬜ **Phase 5** 生产化（DB / auth / 成本核算 / 部署）
 
 **工作台**（`/projects/:projectId`）三栏暗色科技界面：左项目面板（列表 / 切换 / 新建 / 删除）｜ 中对话（文字 / 语音 / 上传 + **卡片选择** + markdown；交付图标"推荐"、单击放大）｜ 右资产画廊。需要拍板时大脑出**卡片 + 俯视草图**让你点选；布局可进编辑器拖拽精调 → 截图喂生图。工具过程默认隐藏（调试开关可见）。

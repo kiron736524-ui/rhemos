@@ -4,6 +4,7 @@ import { MAX_PARALLEL_IMAGES, MODEL_IDS, withRenderStyle } from '@/models/gatewa
 import { imageProvider, resolveActiveImageProvider } from '@/models/image-providers';
 import { checkBoothLayout, failMessages, hasBlocker, type BoothRuleIssue } from '@/lib/booth-rules';
 import { addInspection, appendRunEvent, loadAssetBytes, markLayoutConfirmed, projectIdFromContext, readState, recordRunDeliverable, runIdFromContext, saveAsset, saveRenderInputSnapshot } from '@/lib/storage';
+import { selectUsableAttachmentsFromAnalyses, toRenderInputRefs } from '@/lib/asset-analysis';
 import { inspectImage, inspectConsistency, toInspectionResult, consistencyToInspectionResult } from '@/agent/inspect';
 import { writeImagePrompt } from '@/agent/prompt-writer';
 import type { Deliverable, DeliverableAsset, RenderInputOperation, RenderInputRef } from '@/lib/types';
@@ -90,8 +91,12 @@ export const render = tool({
     const specSummary = { hasSpec: !!s.spec, identity: s.spec?.identity, invariants: s.spec?.invariants, selfCheckCriteria: s.spec?.selfCheckCriteria, updatedAt: s.spec?.updatedAt };
     const layoutSummary = s.layout ? { status: s.layout.status, planAssetId: s.layout.planAssetId, proposal: s.layout.proposal } : undefined;
     const planId = effectivePlanAssetId ?? '';
+    // D33：本轮被选用的上传素材（selectedAttachments 优先，空则 fallback 用分析推导的可用素材）→ 转 snapshot attachment refs。
+    const selAtt = s.selectedAttachments?.length ? s.selectedAttachments : await selectUsableAttachmentsFromAnalyses(pid);
+    const attRefs = toRenderInputRefs(selAtt, s.attachments ?? []);
+    const attIds = attRefs.map((r) => r.id);
     const snapshot = (operation: RenderInputOperation, prompt: string, refs: RenderInputRef[], view?: string) =>
-      saveRenderInputSnapshot(pid, { runId, mode, provider: providerName, model: imageModel, quality: q, size, prompt, intent, view, operation, specSummary, layoutSummary, refs, ruleIssues });
+      saveRenderInputSnapshot(pid, { runId, mode, provider: providerName, model: imageModel, quality: q, size, prompt, intent, view, operation, specSummary, layoutSummary, refs: [...attRefs, ...refs], ruleIssues });
 
     const plan = effectivePlanAssetId ? await loadAssetBytes(pid, effectivePlanAssetId).catch(() => null) : null;
     if (effectivePlanAssetId && !plan) return { error: `找不到平面图资产 ${effectivePlanAssetId}` };
@@ -117,7 +122,7 @@ export const render = tool({
       totalGenMs += genMs;
       if (!raw.length) return { error: '主图生成失败（按平面图）' };
       for (const b of raw) {
-        const a = await saveAsset(pid, b, { kind: 'booth-image', prompt: 'plan-conditioned front', parentId: effectivePlanAssetId, provider: providerName, model: imageModel, quality: q, size, mode, durationMs: genMs, renderInputId: snap.id, sourceAssetIds: planId ? [planId] : [] });
+        const a = await saveAsset(pid, b, { kind: 'booth-image', prompt: 'plan-conditioned front', parentId: effectivePlanAssetId, provider: providerName, model: imageModel, quality: q, size, mode, durationMs: genMs, renderInputId: snap.id, sourceAssetIds: planId ? [planId] : [], sourceAttachmentIds: attIds });
         const insp = await inspectImage(b, criteria);
         await addInspection(pid, a.id, toInspectionResult(insp, MODEL_IDS.inspect));
         heroCands.push({ bytes: b, assetId: a.id, url: a.url, score: insp.score, failN: insp.fails.length });
@@ -133,7 +138,7 @@ export const render = tool({
       totalGenMs += genMs;
       if (!raw.length) return { error: '主图生成失败（无返回）' };
       for (const b of raw) {
-        const a = await saveAsset(pid, b, { kind: 'booth-image', prompt: frontPrompt, provider: providerName, model: imageModel, quality: q, size, mode, durationMs: genMs, renderInputId: snap.id });
+        const a = await saveAsset(pid, b, { kind: 'booth-image', prompt: frontPrompt, provider: providerName, model: imageModel, quality: q, size, mode, durationMs: genMs, renderInputId: snap.id, sourceAttachmentIds: attIds });
         const insp = await inspectImage(b, criteria);
         await addInspection(pid, a.id, toInspectionResult(insp, MODEL_IDS.inspect));
         heroCands.push({ bytes: b, assetId: a.id, url: a.url, score: insp.score, failN: insp.fails.length });
@@ -183,7 +188,7 @@ export const render = tool({
       const judged = await Promise.all(cands.map(async (b) => ({ b, c: await inspectConsistency(hero.bytes, b, view) })));
       judged.sort((x, y) => y.c.consistencyScore - x.c.consistencyScore);
       const best = judged[0];
-      const a = await saveAsset(pid, best.b, { kind: 'booth-image', prompt: `${view} (ref-conditioned)`, parentId: hero.assetId, provider: providerName, model: imageModel, quality: q, size, mode, durationMs: genMs, renderInputId: snap.id, sourceAssetIds: refMeta.map((r) => r.id).filter(Boolean) });
+      const a = await saveAsset(pid, best.b, { kind: 'booth-image', prompt: `${view} (ref-conditioned)`, parentId: hero.assetId, provider: providerName, model: imageModel, quality: q, size, mode, durationMs: genMs, renderInputId: snap.id, sourceAssetIds: refMeta.map((r) => r.id).filter(Boolean), sourceAttachmentIds: attIds });
       await addInspection(pid, a.id, consistencyToInspectionResult(best.c, view, GATE, MODEL_IDS.inspect));
       const passed = best.c.sameBooth && best.c.consistencyScore >= GATE;
       if (passed) {

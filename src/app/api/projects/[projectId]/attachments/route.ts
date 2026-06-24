@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { saveAttachment } from '@/lib/storage';
+import { createBasicAssetAnalysis } from '@/lib/asset-analysis';
 import type { FileUIPart } from 'ai';
 
 export const runtime = 'nodejs';
@@ -26,6 +27,12 @@ export async function POST(req: Request, ctx: { params: Promise<{ projectId: str
       mediaType: f.type || 'application/octet-stream',
     });
     out.push({ type: 'file', mediaType: attachment.mediaType, filename: attachment.filename, url: attachment.url });
+    // D33：上传后自动生成基础素材分析（不调模型）；失败仅告警、绝不阻断上传。
+    try {
+      await createBasicAssetAnalysis(projectId, attachment.id);
+    } catch (e) {
+      console.warn(`[attachments] 基础分析失败（${attachment.filename}）：${e instanceof Error ? e.message : '未知错误'}`);
+    }
   }
 
   return NextResponse.json({ files: out }, { headers: { 'Cache-Control': 'no-store' } });

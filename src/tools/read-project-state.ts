@@ -1,6 +1,6 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { listRenderInputSnapshots, projectIdFromContext, readState } from '@/lib/storage';
+import { listAssetAnalyses, listRenderInputSnapshots, projectIdFromContext, readState } from '@/lib/storage';
 
 export const readProjectState = tool({
   description:
@@ -24,6 +24,22 @@ export const readProjectState = tool({
       refCount: r.refs.length,
       createdAt: r.createdAt,
     }));
+    // D33：素材选材 + 分析的轻量摘要（不回 extractedText 全文 / 不回完整文件内容）。
+    const attById = new Map((s.attachments ?? []).map((a) => [a.id, a]));
+    const selectedAttachments = (s.selectedAttachments ?? []).map((x) => {
+      const a = attById.get(x.attachmentId);
+      return { attachmentId: x.attachmentId, role: x.role, filename: a?.filename, mediaType: a?.mediaType, reason: x.reason };
+    });
+    const assetAnalyses = (await listAssetAnalyses(pid, 10)).map((a) => ({
+      id: a.id,
+      attachmentId: a.attachmentId,
+      kind: a.kind,
+      confidence: a.confidence,
+      recommendedRole: a.recommendedRole,
+      usableForRender: a.usableForRender,
+      summary: a.summary,
+      createdAt: a.createdAt,
+    }));
     return {
       projectId: pid,
       brief: s.brief,
@@ -33,6 +49,8 @@ export const readProjectState = tool({
       attachmentCount: s.attachments?.length ?? 0,
       recentRuns: (s.runs ?? []).slice(0, 5),
       recentRenderInputs,
+      selectedAttachments,
+      assetAnalyses,
       // 瘦身（D26）：不回传长 prompt 与全部判图史，只给最近一次判图摘要，抗大脑上下文膨胀。
       assets: s.assets.map((a) => {
         const last = a.inspections?.[a.inspections.length - 1];

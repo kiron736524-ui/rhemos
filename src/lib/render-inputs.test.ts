@@ -75,6 +75,20 @@ describe('RenderInputSnapshot 存储（D32）', () => {
     expect(json.length).toBeLessThan(8000);
   });
 
+  it('snapshot refs 可包含 attachment 类型引用（D33）', async () => {
+    const snap = await saveRenderInputSnapshot(PID, {
+      ...baseSnapshot(),
+      operation: 'plan-conditioned',
+      refs: [
+        { id: 'att-logo', kind: 'attachment', role: 'brand_logo', filename: 'logo.png', mediaType: 'image/png', url: '/u' },
+        { id: 'asset-hero', kind: 'asset', role: 'previous_render', url: '/h' },
+      ],
+    });
+    const read = await readRenderInputSnapshot(PID, snap.id);
+    expect(read?.refs.some((r) => r.kind === 'attachment' && r.role === 'brand_logo')).toBe(true);
+    expect(JSON.stringify(read)).not.toContain('base64');
+  });
+
   it('saveAsset 关联 renderInputId/sourceAssetIds/sourceAttachmentIds 并能在 state 读回', async () => {
     const snap = await saveRenderInputSnapshot(PID, baseSnapshot());
     const asset = await saveAsset(PID, new Uint8Array([1, 2, 3]), {

@@ -13,6 +13,55 @@ export interface Attachment {
   createdAt: string;
 }
 
+// ── 用户素材选材层（D33）：标记"哪些上传素材被选入当前方案 / 生图输入" ──
+export type AttachmentRole =
+  | 'brand_logo'
+  | 'product_image'
+  | 'style_reference'
+  | 'floor_plan'
+  | 'document_brief'
+  | 'material_reference'
+  | 'other';
+
+export interface AttachmentUseRef {
+  attachmentId: string;
+  role: AttachmentRole;
+  reason?: string;
+}
+
+// ── AssetAnalysis（D33）：对上传原始文件的结构化理解。基础分析不调 vision/OCR，只做文件名/类型启发式 + Office/文本提取。──
+export type AssetAnalysisKind = 'brand_logo' | 'product_image' | 'style_reference' | 'floor_plan' | 'document_brief' | 'unknown';
+
+export interface AssetAnalysis {
+  id: string;
+  projectId: string;
+  attachmentId: string;
+
+  kind: AssetAnalysisKind;
+  confidence: number; // 0-100
+
+  summary: string;
+  extractedText?: string; // 限长（见 asset-analysis.ts MAX_EXTRACT_CHARS）
+
+  facts?: {
+    brandName?: string;
+    productNames?: string[];
+    colors?: string[];
+    materials?: string[];
+    styleKeywords?: string[];
+    boothConstraints?: string[];
+    dimensions?: string[];
+  };
+
+  recommendedRole?: AttachmentRole;
+  usableForRender: boolean;
+  warnings?: string[];
+
+  model?: string; // 未来记录 vision/LLM；基础分析为空
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface InspectionResult {
   pass: boolean;
   score?: number;
@@ -190,6 +239,7 @@ export interface ProjectState {
   layout?: LayoutDecision;
   assets: Asset[];
   attachments?: Attachment[];
+  selectedAttachments?: AttachmentUseRef[]; // D33：被选入方案/生图输入的素材（轻量追踪层）
   runs?: RunSummary[];
   updatedAt: string;
 }
