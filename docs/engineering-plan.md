@@ -191,7 +191,7 @@ stopWhen: [
 loop (大脑自主):
   state = read_project_state()
   if brief 不完备 (按 questioning rubric 做 gap 分析):
-      present_choices 问最高价值的 1-3 个缺口（具体可视化选项）; continue
+      present_choices 问当前最高价值的 1 个布局骨架缺口（具体可视化选项，用户回答后再重排下一问）; continue
   if 无 spec:
       spec = 写 DesignSpec(brief + skills + analyze_reference + footprint); update_spec; continue
   if layout 未 confirmed/skipped:
@@ -266,6 +266,6 @@ loop (大脑自主):
 |---|---|
 | **视觉自检的 UX 陷阱**（旧团队曾因此废弃 QC）| 当前默认把首稿选择权交给用户：`candidate-set` 两张候选先选基准，AI 判图/一致性检查只在用户要求诊断时启用；避免把半成品报告、自动重试和冗余图堆给用户。 |
 | **成本放大**（Opus 全程 + 自主重试）| prepareStep 模型分层（自检走 Sonnet）；每资产 revise≤3 硬预算；预算让大脑看见 |
-| **自由 → 乱跑/过度提问** | system prompt 给决策框架 + questioning rubric 约束提问数（≤3）；step 硬上限兜底 |
+| **自由 → 乱跑/过度提问** | system prompt 给决策框架 + questioning rubric 约束布局骨架一次 1 问；step 硬上限兜底 |
 | **gpt-image-2 调用细节未定** | Phase 0 spike 先锁定（size/编辑/参考图/多图）再开发上层 |
 | **gpt-image-2 vs 旧 nano 的 prompt 适配** | 五层架构/锚定表可复用；但 gpt-image-2 指令遵循/文字渲染更强，可更依赖显式指令，spike 校准 prompt 模式库 |

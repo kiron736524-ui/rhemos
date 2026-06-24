@@ -16,18 +16,19 @@ export type LayoutModule = {
   y: number;
   w: number;
   h: number;
+  note?: string;
 };
 
 const TYPE_COLOR: Record<string, { fill: string; stroke: string }> = {
-  led: { fill: 'rgba(111,161,201,0.42)', stroke: '#6FA1C9' },
-  stage: { fill: 'rgba(111,161,201,0.24)', stroke: '#6FA1C9' },
-  reception: { fill: 'rgba(180,185,196,0.22)', stroke: '#B3B9C4' },
-  meeting: { fill: 'rgba(94,100,111,0.55)', stroke: '#9AA1AD' },
-  storage: { fill: 'rgba(60,66,76,0.66)', stroke: '#5E646F' },
-  product: { fill: 'rgba(136,143,156,0.24)', stroke: '#B3B9C4' },
-  brand: { fill: 'rgba(210,85,74,0.34)', stroke: '#D2554A' },
-  plant: { fill: 'rgba(91,168,115,0.34)', stroke: '#5BA873' },
-  default: { fill: 'rgba(94,100,111,0.28)', stroke: '#888F9C' },
+  led: { fill: '#CFE8FF', stroke: '#2B7DB8' },
+  stage: { fill: '#E4F2FF', stroke: '#2B7DB8' },
+  reception: { fill: '#EEF2F7', stroke: '#667085' },
+  meeting: { fill: '#D8DEE8', stroke: '#4B5563' },
+  storage: { fill: '#C7CEDA', stroke: '#344054' },
+  product: { fill: '#E8ECF3', stroke: '#667085' },
+  brand: { fill: '#FFE1DD', stroke: '#C23A31' },
+  plant: { fill: '#DFF3E5', stroke: '#398A56' },
+  default: { fill: '#E5E7EB', stroke: '#667085' },
 };
 
 const CW = 660,
@@ -98,8 +99,8 @@ export default function LayoutEditor({
   };
 
   const grid: React.ReactElement[] = [];
-  for (let m = 1; m < L; m++) grid.push(<Line key={'gx' + m} points={[ox + px(m), oy, ox + px(m), oy + px(W)]} stroke="rgba(111,161,201,0.1)" strokeWidth={0.6} />);
-  for (let m = 1; m < W; m++) grid.push(<Line key={'gy' + m} points={[ox, oy + px(m), ox + px(L), oy + px(m)]} stroke="rgba(111,161,201,0.1)" strokeWidth={0.6} />);
+  for (let m = 1; m < L; m++) grid.push(<Line key={'gx' + m} points={[ox + px(m), oy, ox + px(m), oy + px(W)]} stroke="#D7E3EF" strokeWidth={0.7} />);
+  for (let m = 1; m < W; m++) grid.push(<Line key={'gy' + m} points={[ox, oy + px(m), ox + px(L), oy + px(m)]} stroke="#D7E3EF" strokeWidth={0.7} />);
 
   const sel = modules.find((m) => m.id === selId) ?? null;
 
@@ -126,14 +127,19 @@ export default function LayoutEditor({
       )}
 
       <div className="overflow-hidden rounded-lg ring-1 ring-ink-800" style={{ width: CW, maxWidth: '100%' }}>
-        <Stage ref={stageRef} width={CW} height={CH} style={{ background: '#0B0C0F' }} onMouseDown={(e) => { if (e.target === e.target.getStage()) setSelId(null); }}>
+        <Stage ref={stageRef} width={CW} height={CH} style={{ background: '#F8FAFC' }} onMouseDown={(e) => { if (e.target === e.target.getStage()) setSelId(null); }}>
           <Layer>
+            <Rect x={0} y={0} width={CW} height={CH} fill="#F8FAFC" listening={false} />
             {grid}
             {/* footprint 四边：开口虚线 */}
             {([['back', ox, oy, ox + px(L), oy], ['front', ox, oy + px(W), ox + px(L), oy + px(W)], ['left', ox, oy, ox, oy + px(W)], ['right', ox + px(L), oy, ox + px(L), oy + px(W)]] as const).map(([side, x1, y1, x2, y2]) => {
               const o = openings.includes(side);
-              return <Line key={side} points={[x1, y1, x2, y2]} stroke={o ? '#6FA1C9' : '#888F9C'} strokeWidth={1.6} dash={o ? [6, 5] : undefined} opacity={o ? 0.55 : 1} />;
+              return <Line key={side} points={[x1, y1, x2, y2]} stroke={o ? '#2B7DB8' : '#111827'} strokeWidth={2.4} dash={o ? [8, 6] : undefined} opacity={o ? 0.95 : 1} />;
             })}
+            <Text text="BACK / 后" x={ox + px(L) / 2 - 36} y={oy - 24} fontSize={12} fill="#344054" fontStyle="bold" listening={false} />
+            <Text text="FRONT / 前" x={ox + px(L) / 2 - 40} y={oy + px(W) + 10} fontSize={12} fill="#344054" fontStyle="bold" listening={false} />
+            <Text text="LEFT" x={ox - 36} y={oy + px(W) / 2 - 7} fontSize={11} fill="#344054" fontStyle="bold" listening={false} />
+            <Text text="RIGHT" x={ox + px(L) + 8} y={oy + px(W) / 2 - 7} fontSize={11} fill="#344054" fontStyle="bold" listening={false} />
             {/* 模块 */}
             {modules.map((m) => {
               const c = TYPE_COLOR[m.type] ?? TYPE_COLOR.default;
@@ -163,8 +169,8 @@ export default function LayoutEditor({
                   ) : (
                     <Rect width={wpx} height={hpx} fill={c.fill} stroke={c.stroke} strokeWidth={1.3} cornerRadius={2} />
                   )}
-                  <Text text={m.name} x={4} y={hpx / 2 - 12} width={wpx - 8} align="center" fontSize={11} fill="#ECEEF2" fontStyle="500" listening={false} />
-                  <Text text={`${m.w}×${m.h}m`} x={4} y={hpx / 2 + 2} width={wpx - 8} align="center" fontSize={9} fill="#B3B9C4" listening={false} />
+                  <Text text={m.name} x={4} y={hpx / 2 - 14} width={wpx - 8} align="center" fontSize={12} fill="#111827" fontStyle="bold" listening={false} />
+                  <Text text={`${m.w}×${m.h}m${m.note ? ` · ${m.note}` : ''}`} x={4} y={hpx / 2 + 2} width={wpx - 8} align="center" fontSize={9.5} fill="#475467" fontStyle="bold" listening={false} />
                 </Group>
               );
             })}

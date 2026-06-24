@@ -245,17 +245,20 @@ function Prose({ children }: { children: string }) {
 type Zone = { name: string; type?: string; x: number; y: number; w: number; h: number; note?: string };
 type BoothLayout = { length: number; width: number; openings?: string[]; facing?: string; zones: Zone[] };
 
+const LAYOUT_OPENINGS = new Set(['front', 'back', 'left', 'right']);
+const LAYOUT_ZONE_TYPES = new Set(['led', 'stage', 'brand', 'reception', 'meeting', 'storage', 'product', 'plant', 'aisle']);
+
 const ZONE_STYLE: Record<string, { fill: string; stroke: string }> = {
-  led: { fill: 'rgba(111,161,201,0.34)', stroke: '#6FA1C9' },
-  stage: { fill: 'rgba(111,161,201,0.2)', stroke: '#6FA1C9' },
-  brand: { fill: 'rgba(210,85,74,0.3)', stroke: '#D2554A' },
-  reception: { fill: 'rgba(180,185,196,0.18)', stroke: '#B3B9C4' },
-  meeting: { fill: 'rgba(94,100,111,0.5)', stroke: '#9AA1AD' },
-  storage: { fill: 'rgba(60,66,76,0.6)', stroke: '#5E646F' },
-  product: { fill: 'rgba(136,143,156,0.2)', stroke: '#B3B9C4' },
-  plant: { fill: 'rgba(91,168,115,0.3)', stroke: '#5BA873' },
-  aisle: { fill: 'rgba(255,255,255,0.02)', stroke: 'rgba(136,143,156,0.3)' },
-  default: { fill: 'rgba(94,100,111,0.22)', stroke: '#888F9C' },
+  led: { fill: '#CFE8FF', stroke: '#2B7DB8' },
+  stage: { fill: '#E4F2FF', stroke: '#2B7DB8' },
+  brand: { fill: '#FFE1DD', stroke: '#C23A31' },
+  reception: { fill: '#EEF2F7', stroke: '#667085' },
+  meeting: { fill: '#D8DEE8', stroke: '#4B5563' },
+  storage: { fill: '#C7CEDA', stroke: '#344054' },
+  product: { fill: '#E8ECF3', stroke: '#667085' },
+  plant: { fill: '#DFF3E5', stroke: '#398A56' },
+  aisle: { fill: '#FFFFFF', stroke: '#B9C4D2' },
+  default: { fill: '#E5E7EB', stroke: '#667085' },
 };
 
 function FloorPlan({ layout }: { layout: BoothLayout }) {
@@ -263,8 +266,8 @@ function FloorPlan({ layout }: { layout: BoothLayout }) {
     W = Number(layout?.width);
   if (!(L > 0) || !(W > 0) || !Array.isArray(layout.zones)) return null;
   const PAD = 26,
-    MAXW = 252,
-    MAXH = 188;
+    MAXW = 384,
+    MAXH = 260;
   const s = Math.min(MAXW / L, MAXH / W);
   const iw = L * s,
     ih = W * s;
@@ -274,8 +277,8 @@ function FloorPlan({ layout }: { layout: BoothLayout }) {
   const Y = (m: number) => PAD + m * s;
   const open = new Set(layout.openings ?? []);
   const grid: React.ReactElement[] = [];
-  for (let m = 1; m < L; m++) grid.push(<line key={'gx' + m} x1={X(m)} y1={PAD} x2={X(m)} y2={PAD + ih} stroke="rgba(111,161,201,0.09)" strokeWidth={0.6} />);
-  for (let m = 1; m < W; m++) grid.push(<line key={'gy' + m} x1={PAD} y1={Y(m)} x2={PAD + iw} y2={Y(m)} stroke="rgba(111,161,201,0.09)" strokeWidth={0.6} />);
+  for (let m = 1; m < L; m++) grid.push(<line key={'gx' + m} x1={X(m)} y1={PAD} x2={X(m)} y2={PAD + ih} stroke="#D7E3EF" strokeWidth={0.7} />);
+  for (let m = 1; m < W; m++) grid.push(<line key={'gy' + m} x1={PAD} y1={Y(m)} x2={PAD + iw} y2={Y(m)} stroke="#D7E3EF" strokeWidth={0.7} />);
   const edges: [string, number, number, number, number][] = [
     ['back', X(0), PAD, X(L), PAD],
     ['front', X(0), PAD + ih, X(L), PAD + ih],
@@ -283,11 +286,12 @@ function FloorPlan({ layout }: { layout: BoothLayout }) {
     ['right', PAD + iw, Y(0), PAD + iw, Y(W)],
   ];
   return (
-    <svg viewBox={`0 0 ${svgW} ${svgH}`} className="block w-full" style={{ background: '#0B0C0F' }} role="img" aria-label="展台俯视平面草图">
+    <svg viewBox={`0 0 ${svgW} ${svgH}`} className="block w-full" style={{ background: '#F8FAFC' }} role="img" aria-label="展台俯视平面草图">
+      <rect x={0} y={0} width={svgW} height={svgH} fill="#F8FAFC" />
       {grid}
       {edges.map(([side, x1, y1, x2, y2]) => {
         const o = open.has(side);
-        return <line key={side} x1={x1} y1={y1} x2={x2} y2={y2} stroke={o ? '#6FA1C9' : '#888F9C'} strokeWidth={1.5} strokeDasharray={o ? '3 3' : '0'} opacity={o ? 0.55 : 1} />;
+        return <line key={side} x1={x1} y1={y1} x2={x2} y2={y2} stroke={o ? '#2B7DB8' : '#111827'} strokeWidth={2} strokeDasharray={o ? '7 5' : '0'} opacity={o ? 0.9 : 1} />;
       })}
       {layout.zones.map((z, i) => {
         const st = ZONE_STYLE[z.type ?? 'default'] ?? ZONE_STYLE.default;
@@ -296,25 +300,25 @@ function FloorPlan({ layout }: { layout: BoothLayout }) {
         return (
           <g key={i}>
             <rect x={X(z.x)} y={Y(z.y)} width={Math.max(0, z.w * s)} height={Math.max(0, z.h * s)} fill={st.fill} stroke={st.stroke} strokeWidth={1} rx={2} />
-            <text x={cx} y={z.note ? cy - 1 : cy + 2.5} textAnchor="middle" fontSize={7} fill="#ECEEF2" fontWeight={500}>
+            <text x={cx} y={z.note ? cy - 2 : cy + 3} textAnchor="middle" fontSize={8.5} fill="#111827" fontWeight={700}>
               {z.name}
             </text>
             {z.note && (
-              <text x={cx} y={cy + 8} textAnchor="middle" fontSize={6} fill="#B3B9C4">
+              <text x={cx} y={cy + 9} textAnchor="middle" fontSize={7.2} fill="#475467" fontWeight={600}>
                 {z.note}
               </text>
             )}
           </g>
         );
       })}
-      <text x={PAD + iw / 2} y={svgH - 7} textAnchor="middle" fontSize={7.5} fill="#6FA1C9" fontFamily="monospace">
+      <text x={PAD + iw / 2} y={svgH - 7} textAnchor="middle" fontSize={8.5} fill="#2B7DB8" fontFamily="monospace" fontWeight={700}>
         ← {L}m →
       </text>
-      <text x={11} y={PAD + ih / 2} textAnchor="middle" fontSize={7.5} fill="#6FA1C9" fontFamily="monospace" transform={`rotate(-90 11 ${PAD + ih / 2})`}>
+      <text x={11} y={PAD + ih / 2} textAnchor="middle" fontSize={8.5} fill="#2B7DB8" fontFamily="monospace" fontWeight={700} transform={`rotate(-90 11 ${PAD + ih / 2})`}>
         ← {W}m →
       </text>
       {layout.facing && (
-        <text x={PAD + iw / 2} y={15} textAnchor="middle" fontSize={6.5} fill="#888F9C">
+        <text x={PAD + iw / 2} y={15} textAnchor="middle" fontSize={8} fill="#475467" fontWeight={700}>
           ▲ {layout.facing}
         </text>
       )}
@@ -323,10 +327,11 @@ function FloorPlan({ layout }: { layout: BoothLayout }) {
 }
 
 /* ── 结构化选择卡片（present_choices 工具输出 → 可点击卡片 + 平面草图，零打字回传）── */
+type ChoiceIssue = { severity?: string; message: string; code?: string };
 type ChoiceData = {
   intro?: string;
   locked?: string[];
-  questions: { key: string; question: string; recommended?: number; options: { label: string; detail?: string; layout?: BoothLayout }[] }[];
+  questions: { key: string; question: string; recommended?: number; options: { label: string; detail?: string; layout?: BoothLayout; issues?: ChoiceIssue[] }[] }[];
 };
 
 // 方案定稿后大脑推来布局 → mount 自动弹编辑器（用此 layout 初始化）+ 卡片可重开 / 跳过。
@@ -358,22 +363,15 @@ function ChoiceCards({ data, onSubmit, busy }: { data: ChoiceData; onSubmit: (te
   const [picks, setPicks] = useState<Record<string, number>>({});
   const [submitted, setSubmitted] = useState(false);
   const questions = data.questions ?? [];
-  const fmt = (sel: Record<string, number>) =>
-    questions.map((q) => `【${q.question}】→ ${q.options[sel[q.key]]?.label ?? '（未选）'}`).join('\n');
-  const submit = (sel: Record<string, number>) => {
-    if (busy || submitted) return;
+  const current = questions[0];
+  const fmt = (q: ChoiceData['questions'][number], choice: number) => `【${q.question}】→ ${q.options[choice]?.label ?? '（未选）'}`;
+  const submit = (choice: number) => {
+    if (!current || busy || submitted) return;
     setSubmitted(true);
-    onSubmit(`我的选择：\n${fmt(sel)}`);
+    onSubmit(`我的选择：\n${fmt(current, choice)}`);
   };
-  const recommended = () => {
-    const sel: Record<string, number> = {};
-    questions.forEach((q) => {
-      if (typeof q.recommended === 'number') sel[q.key] = q.recommended;
-    });
-    return sel;
-  };
-  const hasRec = questions.some((q) => typeof q.recommended === 'number');
-  const allPicked = questions.length > 0 && questions.every((q) => picks[q.key] != null);
+  const hasRec = current && typeof current.recommended === 'number';
+  const currentPick = current ? picks[current.key] : undefined;
 
   if (submitted) {
     return (
@@ -382,6 +380,7 @@ function ChoiceCards({ data, onSubmit, busy }: { data: ChoiceData; onSubmit: (te
       </div>
     );
   }
+  if (!current) return null;
   return (
     <div className="w-full space-y-4 rounded-xl border border-ink-800 bg-ink-850/50 p-4">
       {data.intro && <p className="text-[13.5px] leading-relaxed text-ink-200">{data.intro}</p>}
@@ -395,42 +394,52 @@ function ChoiceCards({ data, onSubmit, busy }: { data: ChoiceData; onSubmit: (te
           </ul>
         </div>
       )}
-      {questions.map((q) => (
-        <div key={q.key} className="space-y-2">
-          <div className="text-[13.5px] font-medium text-ink-50">{q.question}</div>
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-            {q.options.map((o, i) => {
-              const active = picks[q.key] === i;
-              const rec = q.recommended === i;
+      {current && (
+        <div className="space-y-3">
+          <div className="flex items-start justify-between gap-3">
+            <div className="text-[14px] font-medium leading-relaxed text-ink-50">{current.question}</div>
+            <span className="mono-tag shrink-0 rounded bg-ink-900 px-2 py-1 text-ink-500">STEP 1</span>
+          </div>
+          <p className="text-[12px] leading-relaxed text-ink-500">先锁定这一项；后续布局选择会基于本次结果重新生成。</p>
+          <div className={`grid grid-cols-1 gap-3 ${current.options.some((o) => o.layout) ? 'xl:grid-cols-2' : 'sm:grid-cols-2'}`}>
+            {current.options.map((o, i) => {
+              const active = currentPick === i;
+              const rec = current.recommended === i;
+              const issues = (o.issues ?? []).filter((issue) => issue.severity !== 'warning').slice(0, 2);
               return (
                 <button
                   key={i}
                   type="button"
-                  onClick={() => setPicks((p) => ({ ...p, [q.key]: i }))}
-                  className={`u-tap flex flex-col gap-2 rounded-lg border p-2.5 text-left ${active ? 'border-accent bg-accent-soft' : 'border-ink-700 bg-ink-900 hover:border-ink-600'}`}
+                  onClick={() => setPicks((p) => ({ ...p, [current.key]: i }))}
+                  className={`u-tap flex flex-col gap-2 rounded-lg border p-3 text-left ${active ? 'border-accent bg-accent-soft' : 'border-ink-700 bg-ink-900 hover:border-ink-600'}`}
                 >
                   <div className="flex items-center gap-1.5">
-                    <span className={`text-[12.5px] font-medium ${active ? 'text-accent' : 'text-ink-100'}`}>{o.label}</span>
+                    <span className={`text-[13px] font-medium ${active ? 'text-accent' : 'text-ink-100'}`}>{o.label}</span>
                     {rec && <span className="mono-tag rounded bg-signal-soft px-1 py-0.5 text-signal">荐</span>}
                   </div>
                   {o.layout ? (
-                    <div className="overflow-hidden rounded ring-1 ring-ink-800">
+                    <div className="overflow-hidden rounded bg-white ring-1 ring-ink-700">
                       <FloorPlan layout={o.layout} />
                     </div>
                   ) : null}
-                  {o.detail && <span className="text-[11px] leading-relaxed text-ink-400">{o.detail}</span>}
+                  {o.detail && <span className="text-[11.5px] leading-relaxed text-ink-400">{o.detail}</span>}
+                  {issues.length > 0 && (
+                    <div className="rounded border border-signal/30 bg-signal-soft px-2 py-1 text-[11px] leading-relaxed text-signal">
+                      {issues.map((issue) => issue.message).join('；')}
+                    </div>
+                  )}
                 </button>
               );
             })}
           </div>
         </div>
-      ))}
+      )}
       <div className="flex flex-wrap gap-2 pt-1">
         {hasRec && (
           <button
             type="button"
             disabled={busy}
-            onClick={() => submit(recommended())}
+            onClick={() => submit(current.recommended!)}
             className="u-press rounded-lg bg-accent px-3.5 py-2 text-[13px] font-medium text-ink-950 transition hover:bg-accent-deep disabled:opacity-40"
           >
             按推荐来
@@ -438,8 +447,8 @@ function ChoiceCards({ data, onSubmit, busy }: { data: ChoiceData; onSubmit: (te
         )}
         <button
           type="button"
-          disabled={busy || !allPicked}
-          onClick={() => submit(picks)}
+          disabled={busy || currentPick == null}
+          onClick={() => submit(currentPick!)}
           className="u-press rounded-lg border border-ink-700 px-3.5 py-2 text-[13px] text-ink-100 transition hover:bg-ink-800 disabled:opacity-40"
         >
           提交所选
@@ -603,17 +612,34 @@ export default function Workbench() {
     setEditor({
       footprint: { length: layout.length, width: layout.width },
       openings: layout.openings,
-      modules: (layout.zones || []).map((z, i) => ({ id: 'z' + i, name: z.name, type: z.type || 'default', shape: 'rect' as const, x: z.x, y: z.y, w: z.w, h: z.h })),
+      modules: (layout.zones || []).map((z, i) => ({ id: 'z' + i, name: z.name, type: z.type || 'default', shape: 'rect' as const, x: z.x, y: z.y, w: z.w, h: z.h, note: z.note })),
     });
   };
   // 编辑器确认：截图存为 reference 资产 → 发消息让大脑用 render（planAssetId）按它出图
-  const handleEditorConfirm = async (dataUrl: string) => {
+  const handleEditorConfirm = async (dataUrl: string, modules: LayoutModule[]) => {
+    const currentEditor = editor;
     setEditor(null);
+    if (!currentEditor) return;
+    const openings = (currentEditor.openings ?? []).filter((o) => LAYOUT_OPENINGS.has(o));
+    const layout: BoothLayout = {
+      length: currentEditor.footprint.length,
+      width: currentEditor.footprint.width,
+      ...(openings.length ? { openings } : {}),
+      zones: modules.map((m) => ({
+        name: m.name.trim() || '功能区',
+        ...(LAYOUT_ZONE_TYPES.has(m.type) ? { type: m.type } : {}),
+        x: m.x,
+        y: m.y,
+        w: m.w,
+        h: m.h,
+        ...(m.note?.trim() ? { note: m.note.trim() } : {}),
+      })),
+    };
     try {
       const r = await fetch(`/api/projects/${projectId}/reference`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ png: dataUrl }),
+        body: JSON.stringify({ png: dataUrl, layout }),
       });
       const d = (await r.json()) as { assetId?: string };
       if (d.assetId) void send(`已用布局编辑器定稿平面图（参考资产 ${d.assetId}）。请用 render（planAssetId=该参考资产，views=[]，n=2，autoCheck=false）按这张平面图先生成两张首稿主图候选，暂时不要出多视角/俯视/自动精修，等我选择基准图后再继续。`);

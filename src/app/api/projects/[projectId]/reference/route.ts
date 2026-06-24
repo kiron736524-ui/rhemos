@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { markLayoutConfirmed, saveAsset } from '@/lib/storage';
+import { boothLayoutSchema, normalizeBoothLayout } from '@/lib/layout';
 
 export const runtime = 'nodejs';
 
@@ -10,11 +11,15 @@ const MAX_REF_BYTES = 8 * 1024 * 1024; // 8MB 参考图上限（防超大 base64
 export async function POST(req: Request, ctx: { params: Promise<{ projectId: string }> }) {
   const { projectId } = await ctx.params;
   if (!valid(projectId)) return NextResponse.json({ error: 'bad project id' }, { status: 400 });
-  let body: { png?: string };
+  let body: { png?: string; layout?: unknown };
   try {
-    body = (await req.json()) as { png?: string };
+    body = (await req.json()) as { png?: string; layout?: unknown };
   } catch {
     return NextResponse.json({ error: 'bad json' }, { status: 400 });
+  }
+  const layoutParsed = body.layout === undefined ? null : boothLayoutSchema.safeParse(body.layout);
+  if (layoutParsed && !layoutParsed.success) {
+    return NextResponse.json({ error: 'bad layout', issues: layoutParsed.error.flatten() }, { status: 400 });
   }
   const png = body.png ?? '';
   const b64 = png.startsWith('data:') ? png.slice(png.indexOf(',') + 1) : png;
@@ -22,6 +27,6 @@ export async function POST(req: Request, ctx: { params: Promise<{ projectId: str
   const bytes = new Uint8Array(Buffer.from(b64, 'base64'));
   if (bytes.length > MAX_REF_BYTES) return NextResponse.json({ error: 'image too large' }, { status: 413 });
   const asset = await saveAsset(projectId, bytes, { kind: 'reference', prompt: '布局平面图（用户在编辑器定稿）' });
-  await markLayoutConfirmed(projectId, asset.id);
+  await markLayoutConfirmed(projectId, asset.id, layoutParsed?.success ? normalizeBoothLayout(layoutParsed.data) : undefined);
   return NextResponse.json({ assetId: asset.id, url: asset.url });
 }

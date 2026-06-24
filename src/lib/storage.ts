@@ -264,12 +264,12 @@ export function saveLayoutProposal(id: string, layout: BoothLayout): Promise<voi
   });
 }
 
-export function markLayoutConfirmed(id: string, planAssetId: string): Promise<void> {
+export function markLayoutConfirmed(id: string, planAssetId: string, proposal?: BoothLayout): Promise<void> {
   return withLock(id, async () => {
     const s = await readState(id);
     s.layout = {
       status: 'confirmed',
-      proposal: s.layout?.proposal,
+      proposal: proposal ?? s.layout?.proposal,
       planAssetId,
       updatedAt: new Date().toISOString(),
     };

@@ -7,11 +7,58 @@ import { addInspection, appendRunEvent, loadAssetBytes, markLayoutConfirmed, pro
 import { selectUsableAttachmentsFromAnalyses, toRenderInputRefs } from '@/lib/asset-analysis';
 import { inspectImage, inspectConsistency, toInspectionResult, consistencyToInspectionResult } from '@/agent/inspect';
 import { writeImagePrompt } from '@/agent/prompt-writer';
-import type { Deliverable, DeliverableAsset, RenderInputOperation, RenderInputRef } from '@/lib/types';
+import type { BoothLayout, LayoutOpening, Deliverable, DeliverableAsset, RenderInputOperation, RenderInputRef } from '@/lib/types';
 
 const GATE = 70; // 进化链一致性门控（漂移图不进参考池）
 const MAX_VIEWS = 4; // 单次视角硬上限（事前预算边界）
 const MAX_IMAGES_PER_RENDER = 10; // 单工具内部硬预算：挡住 stopWhen 之前的跑飞
+const LAYOUT_EDGES: LayoutOpening[] = ['back', 'front', 'left', 'right'];
+const EDGE_LABEL: Record<LayoutOpening, string> = { back: 'BACK/top long side', front: 'FRONT/main aisle long side', left: 'LEFT short side', right: 'RIGHT short side' };
+const ZONE_TYPE_LABEL: Record<string, string> = {
+  led: 'LED / main visual wall',
+  stage: 'stage / presentation area',
+  brand: 'brand wall or brand surface',
+  reception: 'reception counter',
+  meeting: 'meeting room / talk area',
+  storage: 'storage / back-of-house',
+  product: 'product display',
+  plant: 'planting / soft divider',
+  aisle: 'open circulation aisle',
+};
+const fmtM = (n: number) => `${Number.isInteger(n) ? n : Number(n.toFixed(2))}m`;
+
+const edgeLength = (layout: BoothLayout, edge: LayoutOpening) => (edge === 'back' || edge === 'front' ? layout.length : layout.width);
+const touchingEdges = (layout: BoothLayout, z: BoothLayout['zones'][number]) => {
+  const eps = 0.05;
+  const touches: string[] = [];
+  if (z.y <= eps) touches.push(EDGE_LABEL.back);
+  if (z.y + z.h >= layout.width - eps) touches.push(EDGE_LABEL.front);
+  if (z.x <= eps) touches.push(EDGE_LABEL.left);
+  if (z.x + z.w >= layout.length - eps) touches.push(EDGE_LABEL.right);
+  return touches.length ? touches.join(', ') : 'interior';
+};
+
+function layoutConstraintText(layout?: BoothLayout): string {
+  if (!layout) return '';
+  const openings = Array.from(new Set(layout.openings ?? [])).filter((e): e is LayoutOpening => LAYOUT_EDGES.includes(e as LayoutOpening));
+  const open = new Set(openings);
+  const closed = LAYOUT_EDGES.filter((edge) => !open.has(edge));
+  const zones = layout.zones
+    .map((z, idx) => {
+      const id = String.fromCharCode(65 + idx);
+      const xr = `${fmtM(z.x)}-${fmtM(z.x + z.w)}`;
+      const yr = `${fmtM(z.y)}-${fmtM(z.y + z.h)}`;
+      const kind = z.type ? ZONE_TYPE_LABEL[z.type] ?? z.type : 'functional zone';
+      return `${id}. ${z.name} (${kind}): x=${xr}, y=${yr}, size=${fmtM(z.w)} x ${fmtM(z.h)}, touches=${touchingEdges(layout, z)}${z.note ? `, note=${z.note}` : ''}.`;
+    })
+    .join('\n');
+  return `STRUCTURED FLOOR PLAN HARD LOCK:
+Coordinate system is metric and top-down. Origin (0,0) is the BACK-LEFT corner of the booth plan. X runs left-to-right along the ${fmtM(layout.length)} long side. Y runs back-to-front along the ${fmtM(layout.width)} short side. BACK and FRONT are long sides; LEFT and RIGHT are short sides.
+Outer footprint must be one strict rectangle: ${fmtM(layout.length)} x ${fmtM(layout.width)}. Open edges: ${openings.length ? openings.map((e) => `${EDGE_LABEL[e]} (${fmtM(edgeLength(layout, e))})`).join('; ') : 'none stated'}. Closed/wall-adjacent edges: ${closed.map((e) => `${EDGE_LABEL[e]} (${fmtM(edgeLength(layout, e))})`).join('; ') || 'none'}.
+Functional zones, exact positions:
+${zones}
+Use this structured table as the source of truth. The attached PNG floor plan is only a visual diagram of the same data. Do not swap left/right, do not move zones to another edge, do not turn the rectangular footprint into a polygon, and do not invent extra walls or protrusions. Interior standees/totems are slim freestanding rectangles inside these coordinates only.`;
+}
 
 // 唯一生图入口（首稿候选 / 用户选定基准后的多视角 / 平面图条件化）。大脑只给中文意图，
 // prompt-writer 子 agent 写英文 prompt；identity / 判图要点自读 spec；出口统一 Deliverable。
@@ -101,6 +148,7 @@ export const render = tool({
     // D32 输入快照：spec/layout 摘要 + 每个 provider 调用前固化一条快照（provider 失败也留证据，不存 base64）。
     const specSummary = { hasSpec: !!s.spec, identity: s.spec?.identity, invariants: s.spec?.invariants, selfCheckCriteria: s.spec?.selfCheckCriteria, updatedAt: s.spec?.updatedAt };
     const layoutSummary = s.layout ? { status: s.layout.status, planAssetId: s.layout.planAssetId, proposal: s.layout.proposal } : undefined;
+    const layoutLock = layoutConstraintText(s.layout?.proposal);
     const planId = effectivePlanAssetId ?? '';
     // D33：本轮被选用的上传素材（selectedAttachments 优先，空则 fallback 用分析推导的可用素材）→ 转 snapshot attachment refs。
     const selAtt = s.selectedAttachments?.length ? s.selectedAttachments : await selectUsableAttachmentsFromAnalyses(pid);
@@ -125,7 +173,7 @@ export const render = tool({
       heroCands.push({ bytes: baseBytes, assetId: baseAsset.id, url: baseAsset.url, score: 0, failN: 0 });
     } else if (plan) {
       const instr = withRenderStyle(
-        `${promptIdentity}\n\nThe attached image is a TOP-DOWN FLOOR PLAN of this exhibition booth — each labeled block is a functional zone at its real position and size. Render a photorealistic 3D booth that EXACTLY follows this floor plan (every zone's position, footprint, size and shape must match, including L-shaped counters). The booth OUTER PERIMETER must remain the footprint shape specified in the identity; do not stylize the platform or truss perimeter into a polygon. ${frontPrompt}`,
+        `${promptIdentity}\n\n${layoutLock ? `${layoutLock}\n\n` : ''}The attached image is a TOP-DOWN FLOOR PLAN of this exhibition booth — each labeled block is a functional zone at its real position and size. Render a photorealistic 3D booth that EXACTLY follows this floor plan (every zone's position, footprint, size and shape must match, including L-shaped counters). The booth OUTER PERIMETER must remain the footprint shape specified in the identity; do not stylize the platform or truss perimeter into a polygon. ${frontPrompt}`,
       );
       const planRef: RenderInputRef = { id: planId, kind: 'plan', role: 'floor_plan', url: `/api/assets/${planId}?project=${pid}` };
       const snap = await snapshot('plan-conditioned', instr, [planRef]);
@@ -142,7 +190,7 @@ export const render = tool({
         heroCands.push({ bytes: b, assetId: a.id, url: a.url, score: insp?.score ?? 0, failN: insp?.fails.length ?? 0 });
       }
     } else {
-      const full = withRenderStyle(`${promptIdentity}\n\n${frontPrompt}`);
+      const full = withRenderStyle(`${promptIdentity}\n\n${layoutLock ? `${layoutLock}\n\n` : ''}${frontPrompt}`);
       const snap = await snapshot('text-to-image', full, []);
       const t0 = Date.now();
       const raw = (await Promise.all(Array.from({ length: nn }, () => imageProvider.textToImage(full, { quality: q, size }).catch(() => null)))).filter(
@@ -186,7 +234,7 @@ export const render = tool({
 
     const viewInstruction = (view: string) =>
       withRenderStyle(
-        `${promptIdentity}\n\nUsing the attached reference image(s) of THIS exact exhibition booth, render the SAME booth from ${view}. The references are geometry and identity locks, not loose inspiration. Keep every structural part, material, color, brand placement, furniture COUNT, exact outer footprint boundary stated above, raised platform/carpet rectangle, truss perimeter, wall line, and lighting identical to the reference(s); only the camera viewpoint changes. The booth boundary must stay a clean unbroken rectangle with four 90-degree corners unless the identity explicitly says otherwise: no notches, protrusions, chamfers, diagonal bites, warped corners, add-on floor islands, or polygonal platform/truss outline. Freestanding totems / standees are slim rectangular interior signage boards only, never wall extensions and never part of the outer footprint. Do NOT add, remove, move, darken, clutter, or redesign anything.`,
+        `${promptIdentity}\n\n${layoutLock ? `${layoutLock}\n\n` : ''}Using the attached reference image(s) of THIS exact exhibition booth, render the SAME booth from ${view}. The references are geometry and identity locks, not loose inspiration. Keep every structural part, material, color, brand placement, furniture COUNT, exact outer footprint boundary stated above, raised platform/carpet rectangle, truss perimeter, wall line, and lighting identical to the reference(s); only the camera viewpoint changes. The booth boundary must stay a clean unbroken rectangle with four 90-degree corners unless the identity explicitly says otherwise: no notches, protrusions, chamfers, diagonal bites, warped corners, add-on floor islands, or polygonal platform/truss outline. Freestanding totems / standees are slim rectangular interior signage boards only, never wall extensions and never part of the outer footprint. Do NOT add, remove, move, darken, clutter, or redesign anything.`,
       );
 
     if (!autoCheck) {
