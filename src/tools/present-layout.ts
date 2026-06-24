@@ -1,6 +1,7 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { boothLayoutSchema, normalizeBoothLayout } from '@/lib/layout';
+import { checkBoothLayout, failMessages, hasBlocker } from '@/lib/booth-rules';
 import { projectIdFromContext, saveLayoutProposal } from '@/lib/storage';
 
 // 方案定稿(update_spec)后,大脑调它把俯视布局推给前端 → 前端**自动弹出布局编辑器**(用此 layout 初始化),
@@ -16,7 +17,12 @@ export const presentLayout = tool({
   execute: async (input, opts) => {
     const pid = projectIdFromContext((opts as { experimental_context?: unknown }).experimental_context);
     const layout = normalizeBoothLayout(input.layout);
+    // 规则校验（纯函数）：blocker 打回让大脑重做布局；fail/warning 不阻断，随透传给前端/大脑。
+    const ruleIssues = checkBoothLayout(layout);
+    if (hasBlocker(ruleIssues)) {
+      return { error: `布局存在硬性问题，请修正后重新 present_layout：${failMessages(ruleIssues).join('；')}`, code: 'LAYOUT_RULE_BLOCKER', issues: ruleIssues };
+    }
     await saveLayoutProposal(pid, layout);
-    return { ...input, layout, _kind: 'layout' as const };
+    return { ...input, layout, ruleIssues, _kind: 'layout' as const };
   },
 });

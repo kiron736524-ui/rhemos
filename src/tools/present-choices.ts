@@ -1,6 +1,7 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { boothLayoutSchema, normalizeBoothLayout } from '@/lib/layout';
+import { checkBoothLayout } from '@/lib/booth-rules';
 
 // 结构化卡片提问（替代纯文字问答）。大脑调用它，前端渲染成可点击卡片，用户点选后零打字回传。
 // 每个选项可带一张 SVG 俯视布局草图，让用户看着结构选。非阻塞：execute 纯透传，前端据此渲染。
@@ -39,7 +40,12 @@ export const presentChoices = tool({
     ...input,
     questions: input.questions.map((q) => ({
       ...q,
-      options: q.options.map((o) => (o.layout ? { ...o, layout: normalizeBoothLayout(o.layout) } : o)),
+      options: q.options.map((o) => {
+        if (!o.layout) return o;
+        const layout = normalizeBoothLayout(o.layout);
+        // 每个布局选项跑一次规则校验，issues 附在 option 上供大脑/前端识别（不阻断）。
+        return { ...o, layout, issues: checkBoothLayout(layout) };
+      }),
     })),
     _kind: 'choices' as const,
   }),

@@ -18,6 +18,8 @@ export interface InspectionResult {
   score?: number;
   fails?: string[];
   summary?: string;
+  // 分维度判图（可选，新增）：结构/动线/品牌/材质灯光，沉淀回资产供后续统计。
+  dimensions?: Record<'structure' | 'circulation' | 'brand' | 'materialLighting', { pass: boolean; score?: number; issues: string[] }>;
   model: string;
   at: string;
 }
@@ -115,9 +117,64 @@ export interface RunSummary {
   error?: string;
 }
 
+/**
+ * 强类型 brief（最小骨架，渐进迁移用，不强制全量替换）。
+ * 所有字段可选；与自由记录交叉（`BoothBrief & Record<string, unknown>`），
+ * 旧的中文自由键（如 brief["面积"]）仍可写入，不破坏 update_brief。
+ * 字段词典来源见 rubrics/questioning + docs/engineering-plan.md §4.1。
+ */
+export interface BoothBrief {
+  space?: {
+    length?: number; // 长边（米）
+    width?: number; // 短边（米）
+    openSides?: LayoutOpening[]; // 开口边
+    openingRelation?: 'corner' | 'parallel' | 'unknown'; // 相邻(角位)/相对(穿越)/未知
+    backWall?: LayoutOpening; // 背墙/主视觉墙所在边
+    mainAisle?: LayoutOpening; // 主通道方向
+    heightLimitM?: number; // 场馆限高（米）
+  };
+  height?: {
+    mainWallM?: number; // 主体板墙高（不含 Truss，国内~4.4 / 海外~4.0）
+    overallM?: number; // 总高（含 Truss/吊挂）
+    includesTruss?: boolean; // overall 是否含 Truss
+  };
+  top?: {
+    strategy?: 'none' | 'header' | 'ground_truss' | 'suspended_truss' | 'ceiling' | 'unknown';
+    centerForm?: string; // 中部造型（环形/方框/网格/软膜/几何…）
+    suspensionApproved?: boolean; // 吊点是否确认（未确认不得画悬浮）
+  };
+  brand?: {
+    name?: string;
+    slogan?: string;
+    logo?: 'provided' | 'placeholder' | 'unknown'; // 有素材/占位/未知
+    placements?: string[]; // 落位（主墙/门头/接待/LED/导视…）
+  };
+  products?: {
+    kind?: string;
+    count?: number;
+    scale?: 'small' | 'medium' | 'large' | 'unknown'; // 大件不得上高柜（见 booth-rules）
+    notes?: string;
+  }[];
+  functions?: {
+    requiredZones?: string[]; // 必含功能区
+    priority?: string[]; // 取舍优先级（面积紧张时）
+  };
+  style?: {
+    tone?: string;
+    primaryColor?: string;
+    secondaryColor?: string;
+  };
+  material?: {
+    budgetTier?: 'low' | 'mid' | 'high' | 'unknown';
+    palette?: string[];
+    lighting?: string;
+  };
+}
+
 export interface ProjectState {
   id: string;
-  brief: Record<string, unknown>; // Phase 1 用自由记录；强类型 BoothBrief 后续替换
+  // 强类型骨架 + 自由记录：BoothBrief 字段渐进结构化，旧自由键（中文短语）仍可写入。
+  brief: BoothBrief & Record<string, unknown>;
   spec?: DesignSpec;
   layout?: LayoutDecision;
   assets: Asset[];

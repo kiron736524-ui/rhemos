@@ -1,6 +1,7 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { MODEL_IDS, withRenderStyle, generateImageFromRefs } from '@/models/gateway';
+import { MODEL_IDS, withRenderStyle } from '@/models/gateway';
+import { imageProvider } from '@/models/image-providers';
 import { addInspection, loadAssetBytes, projectIdFromContext, readState, recordRunDeliverable, runIdFromContext, saveAsset } from '@/lib/storage';
 import { inspectImage, toInspectionResult } from '@/agent/inspect';
 import { writeImagePrompt } from '@/agent/prompt-writer';
@@ -24,7 +25,7 @@ export const reviseAsset = tool({
     const criteria = s.spec?.selfCheckCriteria || fix;
     // prompt-writer：中文 fix → 英文"只改一处、其余不变"指令
     const instruction = withRenderStyle(await writeImagePrompt({ intent: fix, identity, kind: 'revise' }));
-    const bytes = await generateImageFromRefs([parentBytes], instruction);
+    const bytes = await imageProvider.editFromRefs([parentBytes], instruction);
     if (!bytes) return { error: '局部修复未返回图（编辑模型无输出）' };
     const asset = await saveAsset(pid, bytes, { kind: 'booth-image', prompt: `revise: ${fix}`, parentId: parentAssetId });
     const insp = await inspectImage(bytes, criteria);

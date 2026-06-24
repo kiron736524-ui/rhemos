@@ -16,15 +16,23 @@
 **工作台**（`/projects/:projectId`）三栏暗色科技界面：左项目面板（列表 / 切换 / 新建 / 删除）｜ 中对话（文字 / 语音 / 上传 + **卡片选择** + markdown；交付图标"推荐"、单击放大）｜ 右资产画廊。需要拍板时大脑出**卡片 + 俯视草图**让你点选；布局可进编辑器拖拽精调 → 截图喂生图。工具过程默认隐藏（调试开关可见）。
 
 ## 技术栈
-Next.js 16 + React 19 + TypeScript + **AI SDK 6** + **Vercel AI Gateway**（模型唯一来源）。UI：Tailwind 4 暗色 token + react-markdown（assistant 渲染）+ **react-konva**（2D 布局编辑器，`toDataURL` 截图喂生图）。
-脑 `anthropic/claude-opus-4.8` · 文生图 `openai/gpt-image-2` · **参考条件化 / 编辑 `google/gemini-3-pro-image`**（换角度 / 平面图条件化；可选 gpt-image-2 直连）· **判图 + 写 prompt `anthropic/claude-opus-4.8`**（升 Opus，质量优先）· 语音清理 `deepseek/deepseek-v4-flash`（均经 Gateway）· ASR `fun-asr-realtime`（DashScope）+ gpt-image-2 图编辑（OpenAI 直连）为 Gateway 例外。
+Next.js 16 + React 19 + TypeScript + **AI SDK 6**。UI：Tailwind 4 暗色 token + react-markdown（assistant 渲染）+ **react-konva**（2D 布局编辑器，`toDataURL` 截图喂生图）。
+
+**模型多来源路由**（不再"唯一经 Gateway"；句柄/封装见 `src/models/gateway.ts` + `src/models/image-providers.ts`）：
+- **经 Vercel AI Gateway**：脑 `anthropic/claude-opus-4.8` · 判图 + 写图 prompt `anthropic/claude-opus-4.8`（升 Opus，质量优先）· 语音清理 `deepseek/deepseek-v4-flash` · 参考条件化 fallback `google/gemini-3-pro-image`。
+- **经 fal.ai**：文生图 + 图编辑 `openai/gpt-image-2`（`fal.run/openai/gpt-image-2[/edit]`，接受 base64 data URI 免上传）。**默认 quality high 偏慢**——fal API 速度 ≠ ChatGPT 内部速度，别按体感预期；参考条件化优先走 fal edit、失败回退 Gemini。
+- **直连**：ASR `fun-asr-realtime`（阿里云 DashScope）。
+
+> 生产化仍需重评生图链路：把 OpenAI 官方直连 / Vercel Gateway / fal.ai / Seedream 做成可插拔 provider（`image-providers.ts` 已留接口）。见 [DECISIONS](docs/DECISIONS.md) D29。
+
 上传先资产化为轻量引用；发给模型前服务端按需读取。docx/xlsx 用 mammoth / **ExcelJS** 提取（含大小/行数/文本上限防护）；图片/PDF Opus 4.8 原生识别。
 
 ## 快速开始
 ```bash
 # .env.local（已 gitignore）需要：
-#   AI_GATEWAY_API_KEY=...   必需，路由所有模型
-#   DASHSCOPE_API_KEY=...    接 ASR 才需要
+#   AI_GATEWAY_API_KEY=...   必需，路由经 Gateway 的模型（脑/判图/写prompt/语音清理/Gemini fallback）
+#   FAL_API_KEY=...          必需，gpt-image-2 文生图 + 图编辑经 fal.ai
+#   DASHSCOPE_API_KEY=...    接 ASR 才需要（阿里云）
 npm install
 npm run dev          # → http://localhost:3000
 ```
@@ -40,6 +48,7 @@ scripts/image-attach-spike.mjs # 上传图片端到端（需 dev server）
 scripts/consistency-spike.mjs  # 参考图换角度一致性（Gemini）
 scripts/evolution-spike.mjs    # identity + 累积参考链增量
 scripts/pipeline-spike.mjs     # 进化式多视角端到端
+scripts/fal-spike.mjs          # fal.ai gpt-image-2 文生图 + 图编辑连通
 ```
 
 ## 文档地图
@@ -54,4 +63,4 @@ scripts/pipeline-spike.mjs     # 进化式多视角端到端
 | Claude Code 接手须知 | [CLAUDE.md](CLAUDE.md) |
 
 ## 红线
-模型唯一经 Gateway（ASR + gpt-image-2 图编辑直连例外）· 自检对用户隐形 · final render 不绕过 spec/layout 决策 · 品牌无素材只占位 · `.env.local` / `.data/` 不入库 · 中文对话/注释/commit。
+模型多来源（脑/判图/写prompt/语音清理/Gemini fallback 经 Gateway · gpt-image-2 经 fal.ai · ASR 经 DashScope 直连）· 自检对用户隐形 · final render 不绕过 spec/layout 决策 · 品牌无素材只占位 · `.env.local` / `.data/` 不入库 · 中文对话/注释/commit。

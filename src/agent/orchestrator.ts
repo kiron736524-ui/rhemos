@@ -31,10 +31,11 @@ function imageBudget(maxImages: number): StopCondition<typeof tools> {
     let imgs = 0;
     for (const s of steps) {
       for (const c of s.toolCalls ?? []) {
-        const ci = (c as { input?: { n?: number; views?: unknown[] } }).input;
+        const ci = (c as { input?: { n?: number; views?: unknown[]; mode?: string } }).input;
         if (c.toolName === 'render') {
-          // 主图 + 每个视角各 n 张（single 模式 views=0）
-          imgs += (ci?.n ?? 2) * (1 + (ci?.views?.length ?? 0));
+          // 主图 + 每个视角各 n 张（single 模式 views=0）；n 留空按 mode 估（concept=1 / final=2）
+          const n = ci?.n ?? (ci?.mode === 'concept' ? 1 : 2);
+          imgs += n * (1 + (ci?.views?.length ?? 0));
         } else if (c.toolName === 'revise_asset') {
           imgs += 1;
         }

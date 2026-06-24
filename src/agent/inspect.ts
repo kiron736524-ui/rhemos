@@ -3,11 +3,28 @@ import { z } from 'zod';
 import { inspector } from '@/models/gateway';
 import type { InspectionResult } from '@/lib/types';
 
+// 单维度判图：pass + 可选分 + issues。供分维度统计（结构/动线/品牌/材质灯光）。
+const dimensionSchema = z.object({
+  pass: z.boolean(),
+  score: z.number().min(0).max(100).optional(),
+  issues: z.array(z.string()).default([]),
+});
+
 // 结构化客观判图：score 可比较，便于 best-of-N 排序；fails 触发修复门。
+// dimensions 可选（新增）：分维度结果，更可统计；旧字段 score/fails/summary 保留，render 无需大改。
 export const inspectionSchema = z.object({
   score: z.number().min(0).max(100).describe('整体结构与物理可信度 0-100'),
   fails: z.array(z.string()).describe('fail 级客观硬伤，每条带图中可观察证据'),
   summary: z.string().describe('一句话客观判语'),
+  dimensions: z
+    .object({
+      structure: dimensionSchema,
+      circulation: dimensionSchema,
+      brand: dimensionSchema,
+      materialLighting: dimensionSchema,
+    })
+    .optional()
+    .describe('分维度判图：structure 结构物理 / circulation 动线功能 / brand 品牌 / materialLighting 材质灯光'),
 });
 export type Inspection = z.infer<typeof inspectionSchema>;
 
@@ -21,7 +38,7 @@ export async function inspectImage(bytes: Uint8Array, criteria: string, modelId?
         content: [
           {
             type: 'text',
-            text: `对照要点客观检查这张展台效果图：结构/物理/空间/一致性/品牌乱码。\nscore=整体结构与物理可信度(0-100)；fails=fail 级客观硬伤(每条给图中可观察证据)；summary=一句话。\n只看客观，不评主观口味（口味问题不算 fail）。\n\n要点：\n${criteria}`,
+            text: `对照要点客观检查这张展台效果图。\nscore=整体结构与物理可信度(0-100)；fails=fail 级客观硬伤(每条给图中可观察证据)；summary=一句话。\n再按四维度各给 {pass, score(0-100), issues[]}：\n- structure：悬浮结构/支撑/跨度/屏幕承重/比例。\n- circulation：开口/入口/接待/动线/功能区拥堵。\n- brand：品牌位置/占位/文字乱码/主视觉方向。\n- materialLighting：材质真实/灯光来源/色温/渲染纯净度。\n只看客观，不评主观口味（口味问题不算 fail）。\n\n要点：\n${criteria}`,
           },
           { type: 'image', image: bytes },
         ],
@@ -84,6 +101,7 @@ export function toInspectionResult(insp: Inspection, model: string): InspectionR
     score: insp.score,
     fails: insp.fails,
     summary: insp.summary,
+    ...(insp.dimensions ? { dimensions: insp.dimensions } : {}),
     model,
     at: new Date().toISOString(),
   };

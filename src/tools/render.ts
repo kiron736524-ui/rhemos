@@ -1,6 +1,8 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { MAX_PARALLEL_IMAGES, MODEL_IDS, withRenderStyle, generateImageFromRefs, falTextToImage } from '@/models/gateway';
+import { MAX_PARALLEL_IMAGES, MODEL_IDS, withRenderStyle } from '@/models/gateway';
+import { imageProvider } from '@/models/image-providers';
+import { checkBoothLayout, failMessages, hasBlocker } from '@/lib/booth-rules';
 import { addInspection, loadAssetBytes, markLayoutConfirmed, projectIdFromContext, readState, recordRunDeliverable, runIdFromContext, saveAsset } from '@/lib/storage';
 import { inspectImage, inspectConsistency, toInspectionResult, consistencyToInspectionResult } from '@/agent/inspect';
 import { writeImagePrompt } from '@/agent/prompt-writer';
@@ -25,10 +27,13 @@ export const render = tool({
       .default([])
       .describe('要的额外角度（英文，如 ["a pure straight-on left side view","a top-down orthographic floor plan view"]）；留空=只出正面主图。最多 4 个'),
     planAssetId: z.string().optional().describe('用户在布局编辑器定稿的俯视平面图 reference 资产 id（有=按平面图硬参考出图）'),
-    mode: z.enum(['concept', 'final']).default('final').describe('concept=早期方向探索，可无 spec；final=最终交付，必须已有 spec.identity 且布局已确认或明确跳过'),
-    quality: z.enum(['low', 'medium', 'high']).default('high'),
+    mode: z
+      .enum(['concept', 'final'])
+      .default('final')
+      .describe('concept=早期方向探索（默认 medium/n=1，快，可无 spec）；final=最终交付（默认 high/n=2，质量优先、慢，必须已有 spec.identity 且布局已确认或明确跳过）'),
+    quality: z.enum(['low', 'medium', 'high']).optional().describe('画质；留空=按 mode 取默认（concept→medium，final→high）。用户明确要"快看方向/草图"才显式压到 medium/low'),
     size: z.enum(['1024x1024', '1536x1024', '1024x1536']).default('1024x1024'),
-    n: z.number().int().min(1).max(MAX_PARALLEL_IMAGES).default(2).describe('每张图 best-of-N 候选数（对抗采样方差，实测单次方差大）'),
+    n: z.number().int().min(1).max(MAX_PARALLEL_IMAGES).optional().describe('每张图 best-of-N 候选数；留空=按 mode 取默认（concept→1，final→2）。实测单次方差大，final 用 2 择优'),
   }),
   execute: async ({ intent, views, planAssetId, mode, quality, size, n }, opts) => {
     const ctx = (opts as { experimental_context?: unknown }).experimental_context;
@@ -37,8 +42,12 @@ export const render = tool({
     const s = await readState(pid);
     const identity = s.spec?.identity ?? '';
     const criteria = s.spec?.selfCheckCriteria || intent; // 没 spec 时用 intent 兜底判图要点
+    // 快慢双模式：concept 默认 medium/n=1（快草案），final 默认 high/n=2（质量优先）。
+    // schema 不设 quality/n 默认，默认在此按 mode 解析——显式传入则尊重，避免 Zod default 与系统提示打架。
+    const q: 'low' | 'medium' | 'high' = quality ?? (mode === 'concept' ? 'medium' : 'high');
+    const nn = n ?? (mode === 'concept' ? 1 : 2);
     if (views.length > MAX_VIEWS) views = views.slice(0, MAX_VIEWS);
-    const requestedImages = n * (1 + views.length);
+    const requestedImages = nn * (1 + views.length);
     if (requestedImages > MAX_IMAGES_PER_RENDER) {
       return { error: `本次 render 预计 ${requestedImages} 张，超过单工具上限 ${MAX_IMAGES_PER_RENDER} 张；请减少 views 或 n。`, code: 'RENDER_BUDGET_EXCEEDED' };
     }
@@ -55,13 +64,24 @@ export const render = tool({
       }
     }
 
+    // 展台规则校验（final）：有布局 proposal 就跑一次纯函数规则。blocker 打回让大脑修布局；
+    // blocker/fail 级消息并入交付 issues（warning 不进，避免噪音）。
+    const ruleMsgs: string[] = [];
+    if (mode === 'final' && s.layout?.proposal) {
+      const ruleIssues = checkBoothLayout(s.layout.proposal, { brief: s.brief, spec: s.spec });
+      if (hasBlocker(ruleIssues)) {
+        return { error: `布局存在硬性问题，请先修正布局再出最终图：${failMessages(ruleIssues).join('；')}`, code: 'LAYOUT_RULE_BLOCKER', issues: ruleIssues };
+      }
+      ruleMsgs.push(...failMessages(ruleIssues));
+    }
+
     const plan = effectivePlanAssetId ? await loadAssetBytes(pid, effectivePlanAssetId).catch(() => null) : null;
     if (effectivePlanAssetId && !plan) return { error: `找不到平面图资产 ${effectivePlanAssetId}` };
     if (effectivePlanAssetId && plan) await markLayoutConfirmed(pid, effectivePlanAssetId);
 
     // ① prompt-writer 子 agent：意图 → 英文五层主图 prompt（不占大脑上下文）
     const frontPrompt = await writeImagePrompt({ intent, identity, kind: mode === 'concept' ? 'concept' : plan ? 'plan' : 'front' });
-    console.log(`[render] mode=${plan ? 'plan' : views.length ? 'views' : 'single'} views=${views.length} n=${n} q=${quality} 预计生图≈${n * (1 + views.length)} 张`);
+    console.log(`[render] mode=${mode}/${plan ? 'plan' : views.length ? 'views' : 'single'} views=${views.length} n=${nn} q=${q} 预计生图≈${nn * (1 + views.length)} 张`);
 
     // ② 主图 best-of-N（文生图 或 平面图条件化）
     const heroCands: { bytes: Uint8Array; assetId: string; url: string; score: number; failN: number }[] = [];
@@ -69,7 +89,7 @@ export const render = tool({
       const instr = withRenderStyle(
         `${identity}\n\nThe attached image is a TOP-DOWN FLOOR PLAN of this exhibition booth — each labeled block is a functional zone at its real position and size. Render a photorealistic 3D booth that EXACTLY follows this floor plan (every zone's position, footprint, size and shape must match, including L-shaped counters). ${frontPrompt}`,
       );
-      const raw = (await Promise.all(Array.from({ length: n }, () => generateImageFromRefs([plan], instr).catch(() => null)))).filter(
+      const raw = (await Promise.all(Array.from({ length: nn }, () => imageProvider.editFromRefs([plan], instr, { quality: q, size }).catch(() => null)))).filter(
         (b): b is Uint8Array => b !== null,
       );
       if (!raw.length) return { error: '主图生成失败（按平面图）' };
@@ -81,7 +101,7 @@ export const render = tool({
       }
     } else {
       const full = withRenderStyle(`${identity}\n\n${frontPrompt}`);
-      const raw = (await Promise.all(Array.from({ length: n }, () => falTextToImage(full, { quality, size }).catch(() => null)))).filter(
+      const raw = (await Promise.all(Array.from({ length: nn }, () => imageProvider.textToImage(full, { quality: q, size }).catch(() => null)))).filter(
         (b): b is Uint8Array => b !== null,
       );
       if (!raw.length) return { error: '主图生成失败（无返回）' };
@@ -104,7 +124,8 @@ export const render = tool({
         status: i === 0 ? 'recommended' : c.failN === 0 ? 'ok' : 'weak',
         score: c.score,
       }));
-      const single: Deliverable = { type: 'single', assets, recommendedId: hero.assetId, ...(hero.failN ? { issues: [`主图有 ${hero.failN} 处客观待改`] } : {}) };
+      const singleIssues = [...ruleMsgs, ...(hero.failN ? [`主图有 ${hero.failN} 处客观待改`] : [])];
+      const single: Deliverable = { type: 'single', assets, recommendedId: hero.assetId, ...(singleIssues.length ? { issues: singleIssues } : {}) };
       await recordRunDeliverable(pid, runId, single);
       return single;
     }
@@ -117,7 +138,7 @@ export const render = tool({
       const instr = withRenderStyle(
         `${identity}\n\nUsing the attached reference image(s) of THIS exact exhibition booth, render the SAME booth from ${view}. Keep every structural part, material, color, brand placement, furniture COUNT and lighting identical to the reference(s); only the camera viewpoint changes — do NOT add, remove, move or redesign anything.`,
       );
-      const cands = (await Promise.all(Array.from({ length: n }, () => generateImageFromRefs(refPool, instr).catch(() => null)))).filter(
+      const cands = (await Promise.all(Array.from({ length: nn }, () => imageProvider.editFromRefs(refPool, instr, { quality: q, size }).catch(() => null)))).filter(
         (b): b is Uint8Array => b !== null,
       );
       if (!cands.length) {
@@ -135,7 +156,8 @@ export const render = tool({
       assets.push({ assetId: a.id, url: a.url, role: 'view', view, status: passed ? 'ok' : 'weak', score: best.c.consistencyScore });
       if (!passed) issues.push(`${view}：一致性偏弱(${best.c.consistencyScore}<${GATE})，可 revise 或重出`);
     }
-    const deliverable: Deliverable = { type: plan ? 'plan-conditioned' : 'view-set', assets, recommendedId: hero.assetId, ...(issues.length ? { issues } : {}) };
+    const finalIssues = [...ruleMsgs, ...issues];
+    const deliverable: Deliverable = { type: plan ? 'plan-conditioned' : 'view-set', assets, recommendedId: hero.assetId, ...(finalIssues.length ? { issues: finalIssues } : {}) };
     await recordRunDeliverable(pid, runId, deliverable);
     return deliverable;
   },

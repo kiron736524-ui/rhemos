@@ -21,7 +21,7 @@ knowledge/
 │  ├─ prompt-craft.md           # 生图 prompt 五层架构 + 两张表 + 批次/负向
 │  ├─ prompt-examples.md        # 生图 prompt few-shot 范例（实战英文展台 prompt）
 │  ├─ reference-and-editing.md  # 参考图/附件理解 + 语义/蒙版编辑
-│  └─ multiview.md              # 多视角一致性（四件套锚点 + 坐标锚图）
+│  └─ multiview.md              # 多视角一致性（进化式参考链 + 判图门控；每视角单视角全幅，非四宫格 sheet）
 └─ rubrics/
    ├─ questioning.md            # 提问完备度（gap 分析表，非脚本）
    └─ inspection.md             # 生图自检（隐形三用法：预防/择优/修复）

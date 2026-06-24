@@ -13,12 +13,12 @@
 | 框架 | Next.js（App Router）+ React 19 + TypeScript 5 | 与生态一致；API Route 承载 Agent，前端承载对话 |
 | Agent 运行时 | **Vercel AI SDK 6（`ai`）** | `Agent`/ToolLoopAgent 抽象 + `stopWhen` + `prepareStep`，就是 Loop Agent 的工业级实现（确切导出名在 Phase 0 对照官方文档锁定） |
 | 前端对话 | **`@ai-sdk/react` 的 `useChat`** | 流式、消息、工具调用状态 |
-| UI 组件 | **AI Elements**（`npx ai-elements@latest add …`）| `Conversation`/`Message`/`PromptInput`/`Response`/`Tool`/`Agent`，把工具调度过程做成可折叠日志 |
-| 模型路由 | **Vercel AI Gateway**（唯一来源）| 模型用字符串形态 `anthropic/claude-opus-4.8` 等；`AI_GATEWAY_API_KEY` 已配 |
-| 生图 | `experimental_generateImage`（AI SDK）调 `openai/gpt-image-2` | 生成 + 编辑；确切调用形态（generateImage vs chat-completions、size/质量/参考图参数）在 Phase 0 spike 验证 |
+| UI 组件 | 自建极简三栏工作台〔历史计划 AI Elements，未采用〕| 对话/卡片/画廊/布局编辑器均自建；工具过程可折叠（调试态） |
+| 模型路由 | **多来源**〔历史写"Gateway 唯一来源"——已被 D29 替代〕：Gateway（脑/判图/写prompt/清理/Gemini）+ **fal.ai**（gpt-image-2）+ DashScope（ASR）| `AI_GATEWAY_API_KEY` + `FAL_API_KEY` + `DASHSCOPE_API_KEY` |
+| 生图 | `openai/gpt-image-2` 经 **fal.ai**（`fal.run/openai/gpt-image-2[/edit]`）| 〔历史计划写 `experimental_generateImage` / Gateway 图像端点——均未采用：Gateway 图编辑不通（D27），现经 fal.ai 文生图 + 图编辑（D29）；provider 层见 `models/image-providers.ts`〕|
 | 工具 schema | **Zod 4** | AI SDK 6 在 Zod 3 下 `tools` 易类型错，统一 Zod 4 |
 | 存储 | **本地文件系统**（`.data/`，gitignored）| 暂不接 DB/Blob；project state 存 JSON、图片存文件，预留 storage 接口以后切换 |
-| 语音 ASR | 阿里云百炼 / DashScope（Fun-ASR）直连 | 唯一非 Gateway 例外，key 已配 |
+| 语音 ASR | 阿里云百炼 / DashScope（Fun-ASR）直连 | 非 Gateway 例外之一（另一例外：gpt-image-2 经 fal.ai，D29），key 已配 |
 | 可观测 | AI SDK telemetry/DevTools + Gateway 用量面板 | 重点盯 Loop Agent 自主重试的成本放大 |
 | 测试 | Vitest（轻量，仅核心逻辑：预算函数、rubric 解析、storage） | 不追求覆盖率，保关键不变量 |
 
@@ -58,8 +58,9 @@
 └───────┬─────────────────────┘         │  prompt 模式库        │
         │                                └──────────────────────┘
 ┌───────▼──────────────────────────────────────────┐
-│  模型层  Gateway: opus-4.8 / gpt-image-2 /        │
-│          sonnet-4.6（自检）   ‖  DashScope ASR(直) │
+│  模型层  Gateway: opus-4.8(脑/判图/写prompt) /     │
+│          gemini(参考 fallback) ‖ fal.ai: gpt-image-2│
+│          ‖ DashScope: ASR(直连)        〔as-built〕  │
 └───────┬───────────────────────────────────────────┘
         │
 ┌───────▼──────────────────────────────────────────┐
@@ -138,6 +139,8 @@ rhemos/
 
 ### 4.1 强类型 Brief（相对旧系统的实质改进）
 旧 rhemax 把面积/开口/高度等都塞进自由文本 `briefSummary`+`knownConstraints`，强结构只活在 `blockingField` 字符串里。新系统**把隐含字段升为强类型**（来源见 domain-knowledge.md 的字段词典）：
+
+> **现状（D30）**：最小骨架 `BoothBrief` 已落地 `src/lib/types.ts`（`brief: BoothBrief & Record<string, unknown>`，兼容旧自由键、未强制全量迁移）。下方为完整设想，字段名 / 层级与已实现版略有出入，待渐进对齐。
 
 ```ts
 type BoothBrief = {

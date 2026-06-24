@@ -7,10 +7,10 @@
 - **D2 · 范式 = 单脑 Loop Agent + 多工具**：控制流交给大脑推理，不用 FSM。为何：用户要"智能沟通"而非死板模板流程。落点：`orchestrator.ts` + `system-prompt.ts`。
 
 ## 模型与平台
-- **D3 · Vercel AI Gateway 为唯一模型源**（ASR 例外）：一个 key 路由全部。为何：统一/监控/fallback、契合"大脑动态选工具"。落点：`models/gateway.ts`。
+- **D3 · Vercel AI Gateway 为唯一模型源**（ASR 例外）：一个 key 路由全部。为何：统一/监控/fallback、契合"大脑动态选工具"。落点：`models/gateway.ts`。**〔已被 D29 替代："唯一"不再成立——现多来源：gpt-image-2 经 fal.ai、ASR 经 DashScope，其余仍经 Gateway〕**
 - **D4 · 脑=Opus 4.8 · 生图=gpt-image-2 · 判图=Sonnet 4.6**：脑+生图由用户指定；判图选 Sonnet（成本/质量平衡，实测能做结构/物理推理）。**inspector 基准测试待做**（候选 Opus/Gemini 3.x Pro/GPT-5，见 `INSPECT_CANDIDATES`）。
 - **D5 · 视频砍掉；ASR 用 DashScope Fun-ASR**（唯一非 Gateway 例外，China region）。**Phase 4 已接线**：`fun-asr-realtime` 转写 + `deepseek-v4-flash`（经 Gateway）清理去语气词；落点 `src/lib/asr/*` + `api/asr` + `VoiceInputButton`。
-- **D6 · 生图走 OpenAI SDK 经 Gateway 兼容端点**（非 AI SDK `generateImage`）：因 `generateImage` 一次性、且要精确控 quality/size/n。落点：`gateway.ts` 的 `openaiViaGateway`、`tools/generate-best-of-n.ts`。
+- **D6 · 生图走 OpenAI SDK 经 Gateway 兼容端点**（非 AI SDK `generateImage`）：因 `generateImage` 一次性、且要精确控 quality/size/n。落点：`gateway.ts` 的 `openaiViaGateway`、`tools/generate-best-of-n.ts`。**〔已被 D29 替代：gpt-image-2 经 Gateway 图编辑不通（D27）、文生图也迁出——现统一经 fal.ai（`falTextToImage`/`falEditFromRefs`）；`openaiViaGateway`、`generate-best-of-n` 均已删〕**
 
 ## 架构与体验
 - **D7 · 丢弃旧 FSM / stage-contract / blockingField / harness**，领域知识重写为 `skills` + `rubrics`（大脑的参考与判断工具，非脚本）。为何：旧那套框死了大脑能动性。落点：`src/knowledge/`。
@@ -23,7 +23,7 @@
 - **D12 · Gateway 图像端点不支持 `partial_images` 流式、不采纳 `jpeg`（强制 PNG）**：实测 `stream:true` 返回整块 JSON、`output_format=jpeg` 仍出 PNG。故**无 partial 预览帧**；流式进度靠 Agent 循环本身。落点：`scripts/image-opts-spike.mjs`。
 
 ## 工程 / 收尾
-- **D13 · 持久化暂存本地 FS**（`.data/`）；部署 / Auth 暂缓；AI Elements UI 暂用极简自建。均为测试期取舍，后续可换。
+- **D13 · 持久化暂存本地 FS**（`.data/`）；部署 / Auth 暂缓；AI Elements UI 暂用极简自建。均为测试期取舍，后续可换。**〔生产化时一并重评：生图 provider 可插拔——OpenAI 官方直连 / Vercel Gateway / fal.ai / Seedream（见 D29）、DB/对象存储（D19）；UI 已落地为自建三栏暗色工作台，未采用 AI Elements〕**
 - **D14 · 不用 tldraw / 不做几何白模**：v2 是 chat-first；白模是当年兜底模型能力的产物，gpt-image-2 指令遵循强、不需要。
 
 ## 安全
@@ -55,11 +55,15 @@
 ## 模型档 / 接线 / 交互（2026-06-15 第四轮：用户指定调整）
 - **D27 · 判图+写prompt 升 Opus · gpt-image-2 经 Gateway 接不通图输入 · 编辑器后挪**。三件：
   1. **判图 + prompt-writer 升 Opus 4.8**（用户指定，质量优先；纠正 D26 的 Sonnet 档）：`MODEL_IDS.inspect` 改 Opus，判图与工具内写 prompt 共用。成本更高（一次多视角出图 ≈ 9 次 Opus 调用），用户认可。
-  2. **gpt-image-2 经 Gateway 用不了图像输入**（实测，否掉"换 gpt-image-2"的设想）：4 路全不通——`generateText`/`responses` 被拒 "is an image model, not a language model"；`images.edit`（SDK + 原始 fetch）均 **404**。根因：Gateway 把 gpt-image-2 锁成"只能文生图"的 image model、没代理它的图编辑端点；Gemini 能做参考条件化是因它在 Gateway 里是**多模态 language model**（走 chat 端点）。**要用 gpt-image-2 做参考条件化只能直连 OpenAI**（第二个非 Gateway 例外，类比 ASR）——`generateImageFromRefs` 已写好：有 `OPENAI_API_KEY` 走 gpt-image-2 直连 `images.edit`（多图参考 + quality high）、否则回退 Gemini。待用户加 key 实测。spike：`scripts/gpt-image-edit-spike.mjs`。
+  2. **gpt-image-2 经 Gateway 用不了图像输入**（实测，否掉"换 gpt-image-2"的设想）：4 路全不通——`generateText`/`responses` 被拒 "is an image model, not a language model"；`images.edit`（SDK + 原始 fetch）均 **404**。根因：Gateway 把 gpt-image-2 锁成"只能文生图"的 image model、没代理它的图编辑端点；Gemini 能做参考条件化是因它在 Gateway 里是**多模态 language model**（走 chat 端点）。**要用 gpt-image-2 做参考条件化只能直连 OpenAI**（第二个非 Gateway 例外，类比 ASR）——`generateImageFromRefs` 已写好：有 `OPENAI_API_KEY` 走 gpt-image-2 直连 `images.edit`（多图参考 + quality high）、否则回退 Gemini。待用户加 key 实测。spike：`scripts/gpt-image-edit-spike.mjs`。**〔bullet 2 已被 D29 替代：最终未走 OpenAI 直连——改用 fal.ai（fal 暴露 gpt-image-2 的 `/edit` 端点且接受 data URI，文生图+图编辑都经 fal）；`OPENAI_API_KEY` 直连路径已移除〕**
   3. **布局编辑器后挪**：从"澄清卡片的精调按钮"挪到"方案定稿后"——大脑写完 spec 调 `present_layout`（带布局）→ 前端 `LayoutGate` **自动弹**布局编辑器（用方案布局初始化）→ 用户精调确认（截图 → `render` planAssetId）/ 或"按原方案直接出"跳过。线性流：选方向 → 方案 → 自动弹编辑器 → 出图。落点：`tools/present-layout.ts`、`agent/{orchestrator,system-prompt}.ts`、`page.tsx`（LayoutGate + 去卡片精调按钮 + 编辑器跳过按钮）。
 
 ## 运行时边界（2026-06-16 第五轮：Run / 状态硬守卫 / 附件资产化）
 - **D28 · 把 Phase 4 的软边界补成代码边界，前端样式不动**。本轮只做运行时与数据契约，不改 UI 视觉：① **最小 Run 模型落地**：`/api/agent` 每轮创建 `run-...`，写 `.data/projects/<id>/runs/<runId>.json`，记录 step/tool 摘要、Deliverable、状态、usage；项目 state 保留最近 30 条 run 摘要。完整队列/取消/成本计价仍属 Phase 5，但现在至少有可恢复的运行痕迹。② **final render 硬守卫**：`render(mode=final)` 代码层要求 `spec.identity` 存在，且 layout 已 `confirmed` 或 `skipped`；`present_layout` 会写 `layout.status=pending`，编辑器确认写 `confirmed + planAssetId`，跳过写 `skipped`。若只是早期方向探索，必须显式 `mode=concept`。③ **附件资产化**：前端发送前先 POST `/api/projects/:id/attachments`，消息只存轻量 FileUIPart URL；`preprocessAttachments` 在发给模型前按需读取附件，docx/xlsx 提取、图片/PDF 临时还原为 data URL。④ **布局规范化**：`BoothLayout` schema 收口到 `lib/layout.ts`，`present_choices`/`present_layout` 输出统一裁剪坐标、限制 zone 数量和尺寸，防止模型布局越界直接打坏编辑器。落点：`lib/{types,storage,layout,attachments}.ts`、`app/api/{agent,projects/...}`、`tools/{render,present-layout,present-choices,read-project-state,revise-asset}.ts`、`page.tsx`。
+
+## 多来源路由 / 工程收敛（2026-06-24 第六轮）
+- **D29 · 模型多来源 as-built——gpt-image-2 经 fal.ai，不再"唯一经 Gateway"**（替代 D3"唯一"、D6 端点、D27 bullet 2 的 OpenAI 直连设想）。三来源：① **经 Gateway**：脑 / 判图 / 写图 prompt（均 Opus 4.8）/ 语音清理（DeepSeek）/ 参考条件化 fallback（Gemini 3 Pro Image）；② **经 fal.ai**：`openai/gpt-image-2` 文生图（`fal.run/openai/gpt-image-2`）+ 图编辑（`…/edit`，base64 data URI 多图参考、免上传 storage）；③ **直连**：ASR（DashScope）。为何 fal 而非 OpenAI 直连：fal 暴露 gpt-image-2 的 `/edit` 端点且接受 data URI，文生图 + 参考条件化一套搞定；而 gpt-image-2 经 Gateway 只代理文生图、不代理图编辑（D27）。**速度提醒**：fal gpt-image-2 默认 quality high 偏慢（~200s 级），**fal API 速度 ≠ ChatGPT 内部速度**，别按体感预期。**provider 抽象**：`src/models/image-providers.ts` 收口 `textToImage`/`editFromRefs`，render/revise 经它调用——生产化在一处切 OpenAI 直连 / Gateway / fal / Seedream，不动业务逻辑。鉴权 `FAL_API_KEY`（`.env.local`，gitignore）。落点：`models/{gateway,image-providers}.ts`、`tools/{render,revise-asset}.ts`、`agent/{orchestrator,system-prompt}.ts`。
+- **D30 · 架构收敛型修改（文档对齐 + 知识前移 + 强类型起步）**。本轮不堆能力，让系统更可维护：① **文档对齐真实链路**：README / ARCHITECTURE / DECISIONS / engineering-plan / AI-HANDOFF / CLAUDE.md 去掉"gpt-image-2 经 Gateway / 唯一经 Gateway"等过时表述（D3/D6/D27 标注被替代）。② **multiview.md 重写**：最终多视角 = 进化式参考链 + 判图门控、每视角单视角全幅，不再是四宫格 sheet（防污染 prompt-writer 生成 turnaround sheet）。③ **最小展台规则引擎** `lib/booth-rules.ts`（纯函数 15 条：长宽/越界/面积超额/关键区重叠/只有家具/主视觉缺失/开口关系/背墙倾向/接待堵口/储物位/开放边被占/四面开中心阻断/洽谈面积/大件上高柜；顶部 Truss 留 TODO 不伪造），present-layout / present-choices / render 三处接入（blocker 打回，fail/warning 写 deliverable issues）——把 markdown 展台规则前移成可执行、可单测的纯计算校验，VLM 判图之外再加一道关。④ **brief 强类型起步** `BoothBrief`（最小骨架，`brief: BoothBrief & Record<string,unknown>` 兼容旧自由键，update_brief 仍写自由 patch）。⑤ **判图 schema 维度化**：inspect 增 `dimensions{structure,circulation,brand,materialLighting}`（可选，保留 score/fails/summary 与 `toInspectionResult` 兼容，沉淀回资产）。⑥ **快慢双模式**：render 的 quality/n 不设 Zod 默认、按 mode 解析（concept→medium/n1 快草案、final→high/n2 慢终稿），避免 Zod 默认与系统提示打架；final 硬守卫不变。⑦ **render 轻拆分**：抽 provider 层（见 D29），外部工具 schema 不变。落点：`lib/{types,booth-rules}.ts`、`models/image-providers.ts`、`agent/{inspect,system-prompt,orchestrator}.ts`、`tools/{render,revise-asset,present-layout,present-choices}.ts`、`knowledge/skills/multiview.md` + 各文档。
 
 ## 进度
 Phase 0（接线 + 连通 spike）· Phase 1（最小 Loop Agent）· Phase 2（best-of-N 自省闭环）· Phase 3（多视图 turnaround sheet）· Phase 4（projectId 隔离 / 三栏工作台 / 多模态上传 / ASR / inspection 沉淀 / per-project 写锁）已完成并实测。**Phase 4 余项**（用户选图=强信号、薄代码级不变量）+ **Phase 5**（DB / auth / 成本核算 / 部署 / 长任务队列）未做 —— 见 `engineering-plan.md`。

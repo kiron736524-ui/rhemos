@@ -75,7 +75,9 @@ export function setSpec(id: string, spec: DesignSpec): Promise<void> {
 export function mergeBrief(id: string, patch: Record<string, unknown>): Promise<void> {
   return withLock(id, async () => {
     const s = await readState(id);
-    s.brief = { ...s.brief, ...patch };
+    // 自由 patch 增量并入；brief 是 BoothBrief & Record（强类型骨架 + 自由键），
+    // 自由 record 合并后类型收窄不到强类型字段，故按交叉类型断言（运行时即纯对象展开）。
+    s.brief = { ...s.brief, ...patch } as ProjectState['brief'];
     await writeStateUnlocked(s);
   });
 }

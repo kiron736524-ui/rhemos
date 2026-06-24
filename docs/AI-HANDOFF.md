@@ -8,7 +8,7 @@
 ## 60 秒定位：想改 X → 去看 Y
 | 想做什么 | 去哪 |
 |---|---|
-| 换模型 / 模型句柄 | `src/models/gateway.ts`（脑 Opus / 文生图 gpt-image-2 / **参考条件化 Gemini（+gpt-image-2 直连）** / **判图+写prompt 现 Opus** / 清理 + `generateImageFromRefs` + `withRenderStyle` 画风锚）|
+| 换模型 / 模型句柄 | `src/models/gateway.ts`（脑 Opus / 文生图 gpt-image-2 经 **fal.ai** / **参考条件化 fal edit→Gemini fallback** / **判图+写prompt Opus** / 清理）+ `src/models/image-providers.ts`（生图 provider 抽象 `textToImage`/`editFromRefs`）；画风锚 `withRenderStyle` |
 | 改大脑行为 / 工作循环 / 铁律 | `src/agent/system-prompt.ts`（PREAMBLE）|
 | 改领域知识（决策型在大脑 / 执行型在 prompt-writer）| `src/knowledge/skills/*` + `src/knowledge/rubrics/*`（D26 分流：大脑装决策型 7 skill + 2 rubric；写图细节 6 skill 归 `prompt-writer`）|
 | 加 / 改工具 | `src/tools/*.ts` → 注册在 `src/agent/orchestrator.ts` |
@@ -31,7 +31,7 @@
 | 连通性 / 并发 / 画质实测脚本 | `scripts/*.mjs`（`node --env-file .env.local scripts/<x>.mjs`）|
 
 ## 不变量（不要破坏）
-1. **模型唯一经 Gateway**（`src/models/gateway.ts`）；例外：ASR(DashScope) 直连、gpt-image-2 图编辑（有 `OPENAI_API_KEY` 时直连，因 Gateway 不代理 `images.edit`，见 D27）。
+1. **模型多来源**（不再"唯一经 Gateway"，见 D29）：脑 / 判图 / 写prompt / 清理 / Gemini fallback 经 Gateway（`src/models/gateway.ts`）；**gpt-image-2 经 fal.ai**（`falTextToImage`/`falEditFromRefs`，`FAL_API_KEY`）；**ASR 经 DashScope 直连**。生图统一经 `src/models/image-providers.ts` 的 provider 层。
 2. **自检对用户隐形**：客观缺陷大脑内部处理、主观口味走对话，**绝不给用户报告 / 半成品**。
 3. **品牌无素材只占位**、不臆造文字 / Logo。
 4. 知识层是大脑的**参考与判断工具**，不是死板脚本；**不要重建 FSM / blockingField** 那套调度机器。
@@ -39,8 +39,8 @@
 6. final render 不能绕过 `update_spec` 与布局决策；要草图只能显式 `mode=concept`。
 
 ## 实测 gotchas（踩过的坑，省你时间）
-- **gpt-image-2 慢**：low~8s / medium~30s / high~200s。概念/迭代用 medium，high 仅单张终图。默认画幅 1024。
-- **Gateway 图像端点不支持 `partial_images` 流式**（`stream` 被忽略），**不采纳 `output_format=jpeg`**（强制 PNG）。故生图走 **OpenAI SDK 经 Gateway 兼容端点**（`https://ai-gateway.vercel.sh/v1`），**不是** AI SDK 的 `generateImage`。
+- **gpt-image-2 慢（经 fal.ai）**：low~8s / medium~30s / high~200s；**fal API 速度 ≠ ChatGPT 内部速度**，别按体感预期。快慢双模式：`render(mode=concept)` 默认 medium/n=1（快草案）、`render(mode=final)` 默认 high/n=2（终稿）。默认画幅 1024。
+- **fal 同步端点返回整图、无 partial 流式预览帧**（流式进度靠 Agent 循环本身）；输出托管 URL，代码下载字节后落 asset。〔历史：曾设想生图走 Gateway / OpenAI 兼容端点 + `generateImage`——均未采用，现经 fal.ai，见 D29〕
 - **best-of-N 是并行**（实测 4 张墙钟≈单张）→ 横向抽奖是主力质量杠杆；纵向 `revise` 是窄回退。并发上限 2。
 - **high 不能对 best-of-N + revise**（3×200s 会超时）；全闭环带 revise ≈ 3.7min。
 - 流式进度靠 Agent 循环本身（文字流 + 工具状态），**不是 partial 预览帧**。
@@ -49,8 +49,8 @@
 - **多轮 400**：UIMessage 回传后历史里 `tool_use.input` 可能是空串 `""` → Gateway 400。route 的 `sanitizeToolInputs` 把非对象入参兜成 `{}`。
 - **改 `/api/**/route.ts` 后 dev server 热重载可能不生效**：重启或 curl 闭环验证，别只读代码就认定生效（前端 bundle 与 API route 分别编译）。
 - **headless 预览测不了文件上传交互**：合成 click 不弹文件框、合成 change 触发的 onChange 也别"看到事件就算验证"；真实选文件流程交给用户或 Claude-in-Chrome `file_upload` 确认。
-- **图像编辑 / 参考图：默认走 `generateText` + input image part 经 `gemini-3-pro-image`**（gpt-image-2 经 Gateway 图输入实测 4 路全不通：chat/responses 拒 "image model"、`images.edit` 404，见 D27）。要用 gpt-image-2 须**直连 OpenAI**——`generateImageFromRefs` 有 `OPENAI_API_KEY` 自动走直连、否则回退 Gemini。
-- **多视角一致性**：单参考换角度方差大（实测 62~88，故 best-of-N 择优是刚需）；累积参考链能提升一致性，但**把漂移图当参考会传染漂移** → 必须判图门控（仅通过的进参考池，`CONSISTENCY_GATE=70`）。`generate_views` 是落地。
+- **图像编辑 / 参考图：优先走 fal `gpt-image-2/edit`**（`falEditFromRefs`，base64 data URI 多图参考），**失败回退 `gemini-3-pro-image` 经 Gateway**（`generateText` + input image part）。统一入口 `generateImageFromRefs`（fal-first / Gemini-fallback），外面再由 `image-providers.editFromRefs` 包一层。〔历史 D27：gpt-image-2 经 Gateway 图输入 4 路全不通、曾设想直连 OpenAI `images.edit`——最终改用 fal（D29），`OPENAI_API_KEY` 路径已移除〕
+- **多视角一致性**：单参考换角度方差大（实测 62~88，故 best-of-N 择优是刚需）；累积参考链能提升一致性，但**把漂移图当参考会传染漂移** → 必须判图门控（仅通过的进参考池，`CONSISTENCY_GATE=70`）。`render`（给 views）是落地（进化式参考链）。
 - **平面图条件化最强**：方案定稿 → `present_layout` **自动弹** `LayoutEditor` → 用户拖好 → `toDataURL()` 截图 → `render`(planAssetId) 以平面图为硬参考出 3D，比纯文字 prompt 精确一个量级。
 - **附件不再进 conversation.json 存 base64**：前端发送前先上传到 `/api/projects/:id/attachments`，UIMessage 只保留 URL；`preprocessAttachments` 发给模型前临时读取、提取或还原。若看到历史对话里还有 data URL，多半是旧消息。
 - **Run 是最小运行记录，不是完整队列**：每轮 agent 写 `.data/projects/<id>/runs/<runId>.json`，可追 step/tool/deliverable/status；真正的取消、重试恢复、成本计价和跨进程队列仍是 Phase 5。
@@ -62,7 +62,7 @@
 - **brief 是要主动写的**：`ProjectState.brief` 不会自己填——大脑须在澄清拍板后调 `update_brief` 增量落事实（`storage.mergeBrief`），否则 `read_project_state` 永远读到空 `{}`、跨轮记忆丢失、重复追问。
 
 ## 现状
-Phase 0-4 完成并实测，并经多轮重大升级：**UI 颠覆**（暗色工程制图科技，rhemax 黑红蓝）· **卡片提问 + 布局编辑器**（`present_choices` 可点卡片 + 俯视草图，零打字；react-konva `LayoutEditor` 拖拽精调 → 截图喂生图）· **工业级一致性**（identity 锁定 / 画风锚 / 进化式参考链 + 判图门控 / 平面图条件化生图，参考条件化用 Gemini 3 Pro Image）· **对话持久化 + 附件资产化** · **最小 Run 记录 + final render 代码守卫**。Phase 5（生产化：DB / auth / 成本核算 / 部署 / 长任务队列）未做，见 `engineering-plan.md`。
+Phase 0-4 完成并实测，并经多轮重大升级：**UI 颠覆**（暗色工程制图科技，rhemax 黑红蓝）· **卡片提问 + 布局编辑器**（`present_choices` 可点卡片 + 俯视草图，零打字；react-konva `LayoutEditor` 拖拽精调 → 截图喂生图）· **工业级一致性**（identity 锁定 / 画风锚 / 进化式参考链 + 判图门控 / 平面图条件化生图，参考条件化优先 fal gpt-image-2/edit、回退 Gemini）· **对话持久化 + 附件资产化** · **最小 Run 记录 + final render 代码守卫**。Phase 5（生产化：DB / auth / 成本核算 / 部署 / 长任务队列）未做，见 `engineering-plan.md`。
 
 ## 深入阅读顺序
 `docs/ARCHITECTURE.md`（如何建）→ `docs/DECISIONS.md`（为何这么定）→ `docs/engineering-plan.md`（路线图）→ `docs/domain-knowledge.md` + `src/knowledge/README.md`（领域知识层）→ `rhemos-build-plan.md`（最初策略基线）。

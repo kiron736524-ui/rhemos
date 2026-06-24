@@ -87,11 +87,12 @@ export const withRenderStyle = (prompt: string): string => `${prompt}\n\n${RENDE
  * 优先 **fal gpt-image-2/edit**（用户指定渠道，默认 1024 + quality high；接受 base64 data URI 免上传）；
  * fal 失败 / 无 FAL_API_KEY 则回退 **Gemini 3 Pro Image 经 Gateway**。多图参考 = 更强身份锁定（进化链）。失败返回 null。
  */
-export async function generateImageFromRefs(refs: Uint8Array[], instruction: string): Promise<Uint8Array | null> {
+export async function generateImageFromRefs(refs: Uint8Array[], instruction: string, opts?: { quality?: string; size?: string }): Promise<Uint8Array | null> {
   if (process.env.FAL_API_KEY) {
-    const out = await falEditFromRefs(refs, instruction).catch(() => null);
+    const out = await falEditFromRefs(refs, instruction, opts).catch(() => null);
     if (out) return out;
   }
+  // Gemini fallback 经 Gateway（多模态 language model）：不接受 quality/size 参数，忽略 opts。
   const r = await generateText({
     model: gateway.languageModel(MODEL_IDS.imageEdit),
     messages: [{ role: 'user', content: [{ type: 'text', text: instruction }, ...refs.map((image) => ({ type: 'image' as const, image }))] }],
