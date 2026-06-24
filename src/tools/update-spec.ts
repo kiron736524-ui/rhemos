@@ -1,6 +1,16 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { projectIdFromContext, setSpec } from '@/lib/storage';
+import { projectIdFromContext, readState, setSpec } from '@/lib/storage';
+import type { DesignSpec } from '@/lib/types';
+
+const rectangleBoundaryRule = (length?: number, width?: number) =>
+  [
+    `Booth outer footprint shape is a STRICT RECTANGLE${length && width ? `, exactly ${length}m x ${width}m` : ''}.`,
+    'The raised platform, carpet/floor finish edge, truss perimeter, back wall line, and booth boundary must be one unbroken rectilinear outline with four 90-degree corners.',
+    'Do NOT create a hexagonal, octagonal, chamfered, diagonal-cut, curved, notched, stepped, bitten-out, protruding, warped, or polygonal outer perimeter.',
+    'No random add-on floor islands, no corner bulges, no decorative cutouts in the booth footprint, and no facade piece may extend outside the rectangle unless the user explicitly requested that irregular shape.',
+    'Any circular route, round table, ring light, ring screen, curved LED strip, product plinth, totem, standee, or decorative feature is an interior design element only, never the booth outline.',
+  ].join(' ');
 
 export const updateSpec = tool({
   description:
@@ -14,10 +24,35 @@ export const updateSpec = tool({
       ),
     invariants: z.array(z.string()).default([]).describe('跨视图不可变量（尺寸/开口/墙位/品牌位置/材质色温等）'),
     selfCheckCriteria: z.string().describe('客观判图要点：本图应满足的结构/物理/空间/品牌落位要点'),
+    footprint: z
+      .object({
+        shape: z.enum(['rectangle', 'l-shape', 'custom']).default('rectangle'),
+        dimensions: z.object({ length: z.number().optional(), width: z.number().optional() }).optional(),
+        source: z.enum(['user', 'default']).default('default'),
+        boundaryRule: z.string().optional(),
+        allowChamfer: z.boolean().default(false),
+        allowCurvedPerimeter: z.boolean().default(false),
+      })
+      .optional()
+      .describe('展台外轮廓形状。用户未明确异形时必须用 rectangle；环形动线/吊挂不等于异形外轮廓。'),
   }),
-  execute: async ({ narrative, identity, invariants, selfCheckCriteria }, opts) => {
+  execute: async ({ narrative, identity, invariants, selfCheckCriteria, footprint }, opts) => {
     const pid = projectIdFromContext((opts as { experimental_context?: unknown }).experimental_context);
-    await setSpec(pid, { narrative, identity, invariants, selfCheckCriteria, updatedAt: new Date().toISOString() });
+    const s = await readState(pid);
+    const length = footprint?.dimensions?.length ?? s.layout?.proposal?.length ?? s.brief.space?.length;
+    const width = footprint?.dimensions?.width ?? s.layout?.proposal?.width ?? s.brief.space?.width;
+    const normalizedFootprint: NonNullable<DesignSpec['footprint']> = {
+      shape: footprint?.shape ?? 'rectangle',
+      dimensions: { length, width },
+      source: footprint?.source ?? (length && width ? 'user' : 'default'),
+      boundaryRule: footprint?.boundaryRule ?? rectangleBoundaryRule(length, width),
+      allowChamfer: footprint?.allowChamfer ?? false,
+      allowCurvedPerimeter: footprint?.allowCurvedPerimeter ?? false,
+    };
+    const boundary = `FOOTPRINT BOUNDARY HARD RULE: ${normalizedFootprint.boundaryRule}`;
+    const nextIdentity = identity.includes('FOOTPRINT BOUNDARY HARD RULE') ? identity : `${identity}\n\n${boundary}`;
+    const nextCriteria = selfCheckCriteria.includes('外轮廓') ? selfCheckCriteria : `${selfCheckCriteria}\n外轮廓硬规则：${normalizedFootprint.boundaryRule}`;
+    await setSpec(pid, { narrative, identity: nextIdentity, footprint: normalizedFootprint, invariants: [...invariants, normalizedFootprint.boundaryRule], selfCheckCriteria: nextCriteria, updatedAt: new Date().toISOString() });
     return { saved: true };
   },
 });

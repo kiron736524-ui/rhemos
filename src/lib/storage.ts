@@ -4,13 +4,14 @@ import path from 'node:path';
 import type { Asset, AssetAnalysis, Attachment, AttachmentKind, AttachmentUseRef, BoothLayout, Deliverable, DesignSpec, InspectionResult, ProjectState, ProjectSummary, RenderInputSnapshot, RunBudget, RunEvent, RunRecord, RunStatus } from './types';
 
 // 本地文件系统存储（Phase 4：projectId-keyed 隔离 + per-project 写锁；DB/Blob 留 Phase 5）。
-const ROOT = path.join(process.cwd(), '.data', 'projects');
+const ROOT = path.join(/*turbopackIgnore: true*/ process.cwd(), '.data', 'projects');
 export const DEFAULT_PROJECT = 'default';
 
 const projDir = (id: string) => path.join(ROOT, id);
 const assetsDir = (id: string) => path.join(projDir(id), 'assets');
 const attachmentsDir = (id: string) => path.join(projDir(id), 'attachments');
 const runsDir = (id: string) => path.join(projDir(id), 'runs');
+const candidatesDir = (id: string) => path.join(projDir(id), 'candidates');
 const renderInputsDir = (id: string) => path.join(projDir(id), 'render-inputs');
 const analysesDir = (id: string) => path.join(projDir(id), 'asset-analyses');
 const statePath = (id: string) => path.join(projDir(id), 'state.json');
@@ -120,6 +121,65 @@ export async function saveAsset(
     await writeStateUnlocked(s);
   });
   return asset;
+}
+
+const candidatePath = (id: string, assetId: string) => path.join(candidatesDir(id), `${assetId}.json`);
+
+export async function saveCandidateAsset(
+  id: string,
+  bytes: Uint8Array,
+  meta: Pick<Asset, 'kind'> &
+    Partial<Pick<Asset, 'prompt' | 'parentId' | 'inspections' | 'provider' | 'model' | 'quality' | 'size' | 'mode' | 'durationMs' | 'renderInputId' | 'sourceAttachmentIds' | 'sourceAssetIds'>>,
+): Promise<Asset> {
+  const assetId = `candidate-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const file = path.join(assetsDir(id), `${assetId}.png`);
+  const asset: Asset = {
+    id: assetId,
+    kind: meta.kind,
+    prompt: meta.prompt,
+    parentId: meta.parentId,
+    inspections: meta.inspections,
+    provider: meta.provider,
+    model: meta.model,
+    quality: meta.quality,
+    size: meta.size,
+    mode: meta.mode,
+    durationMs: meta.durationMs,
+    renderInputId: meta.renderInputId,
+    sourceAttachmentIds: meta.sourceAttachmentIds,
+    sourceAssetIds: meta.sourceAssetIds,
+    path: path.relative(process.cwd(), file),
+    url: `/api/assets/${assetId}?project=${id}`,
+    createdAt: new Date().toISOString(),
+  };
+  if (tombstoned.has(id)) return asset;
+  await mkdir(assetsDir(id), { recursive: true });
+  await mkdir(candidatesDir(id), { recursive: true });
+  await writeFile(file, bytes);
+  await writeFile(candidatePath(id, assetId), JSON.stringify(asset, null, 2), 'utf8');
+  return asset;
+}
+
+export function promoteCandidateAsset(id: string, assetId: string): Promise<Asset> {
+  return withLock(id, async () => {
+    if (!/^[\w-]+$/.test(assetId)) throw new Error('bad asset id');
+    const s = await readState(id);
+    const existing = s.assets.find((a) => a.id === assetId);
+    if (existing) {
+      s.baseAssetId = existing.id;
+      await writeStateUnlocked(s);
+      return existing;
+    }
+    const p = candidatePath(id, assetId);
+    if (!existsSync(p)) throw new Error(`candidate not found: ${assetId}`);
+    const asset = JSON.parse(await readFile(p, 'utf8')) as Asset;
+    if (asset.id !== assetId) throw new Error(`candidate id mismatch: ${assetId}`);
+    if (!existsSync(path.join(assetsDir(id), `${assetId}.png`))) throw new Error(`candidate file missing: ${assetId}`);
+    s.assets.push(asset);
+    s.baseAssetId = asset.id;
+    await writeStateUnlocked(s);
+    return asset;
+  });
 }
 
 const rand = () => Math.random().toString(36).slice(2, 8);

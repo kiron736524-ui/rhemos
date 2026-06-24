@@ -37,7 +37,7 @@ Stable defaults. Labels `auto-handle` / `assume` / `Blocking` are intentional se
 9. **Brand identity — Blocking if missing.** Brand name, slogan/tagline, logo/key icon, and key-visual placement affect main wall, top header, reception counter, LED/KV, and wayfinding. If exact content is missing, use placeholders and reserve positions; never invent real brand text or exact logo artwork.
 10. **Furniture and soft furnishings — auto-handle.** Tables, chairs, sofas, greenery, accessories support functional zones; they are not protagonists. Configure from capacity, flow, and booth purpose.
 11. **Area tension — Blocking if severe.** Small area + many functions requires prioritization. If the user delegates, prioritize the function best serving the stated goal and make the tradeoff visible.
-12. **Prevention self-check — mandatory, BEFORE generating.** While writing the prompt (not after), correct unsupported structures, span violations, missing brand positions, impossible meeting rooms, blocked entrances, and any layout reading as a store/stage/lobby instead of a booth. (Post-generation checking is silent and internal — see `rubrics/inspection`.)
+12. **Prevention self-check — mandatory, BEFORE generating.** While writing the prompt (not after), correct unsupported structures, span violations, missing brand positions, impossible meeting rooms, blocked entrances, and any layout reading as a store/stage/lobby instead of a booth. Post-generation checking is optional and should only run when the user asks for AI diagnosis/screening/fixes.
 
 ---
 

@@ -45,6 +45,7 @@ export const readProjectState = tool({
       brief: s.brief,
       spec: s.spec ?? null,
       layout: s.layout ?? null,
+      baseAssetId: s.baseAssetId ?? null,
       assetCount: s.assets.length,
       attachmentCount: s.attachments?.length ?? 0,
       recentRuns: (s.runs ?? []).slice(0, 5),

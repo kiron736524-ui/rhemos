@@ -24,6 +24,7 @@ interface Asset {
 interface ProjectState {
   id: string;
   assets: Asset[];
+  baseAssetId?: string;
 }
 interface ProjectSummary {
   id: string;
@@ -51,8 +52,13 @@ const SUGGESTIONS = [
 ];
 
 // 一条交付（内部统一形状，兼容新 Deliverable 协议 + 旧返回形状）
-type DeliveryItem = { url: string; view?: string; status: string; recommended: boolean };
+type DeliveryItem = { assetId?: string; url: string; view?: string; status: string; recommended: boolean };
 type DeliveryGroup = { type: string; items: DeliveryItem[]; grouped: boolean };
+type PreviewState = { urls: string[]; index: number; zoom: number };
+type OpenPreview = (url: string, urls?: Array<string | null | undefined>) => void;
+
+const uniqueUrls = (urls: Array<string | null | undefined>): string[] => Array.from(new Set(urls.filter((u): u is string => !!u)));
+const clampZoom = (z: number): number => Math.min(4, Math.max(0.5, Number(z.toFixed(2))));
 
 // 英文视角名 → 中文短标
 function viewLabel(view?: string): string {
@@ -77,7 +83,7 @@ function extractDeliveries(parts: readonly unknown[]): DeliveryGroup[] {
     if (Array.isArray(o.assets) && typeof o.recommendedId === 'string') {
       const items = (o.assets as DeliverableAsset[])
         .filter((a) => a.url)
-        .map((a) => ({ url: a.url, view: a.view, status: a.status, recommended: a.assetId === o.recommendedId }));
+        .map((a) => ({ assetId: a.assetId, url: a.url, view: a.view, status: a.status, recommended: a.assetId === o.recommendedId }));
       if (items.length) groups.push({ type: String(o.type), items, grouped: o.type === 'view-set' || o.type === 'plan-conditioned' });
       continue;
     }
@@ -98,9 +104,10 @@ function extractDeliveries(parts: readonly unknown[]): DeliveryGroup[] {
 }
 
 // 多视角交付：主图 + 各视角分组展示（view-set / plan-conditioned）。弱视角标黄。
-function ViewSet({ group, onZoom }: { group: DeliveryGroup; onZoom: (url: string) => void }) {
+function ViewSet({ group, onZoom }: { group: DeliveryGroup; onZoom: OpenPreview }) {
   const hero = group.items.find((i) => i.recommended) ?? group.items[0];
   const views = group.items.filter((i) => i !== hero);
+  const urls = group.items.map((i) => i.url);
   return (
     <div className="mt-1 w-full rounded-xl border border-ink-700 bg-ink-900/40 p-3">
       <div className="mono-tag mb-2 flex items-center gap-1.5 text-ink-500">
@@ -112,7 +119,7 @@ function ViewSet({ group, onZoom }: { group: DeliveryGroup; onZoom: (url: string
         <img
           src={hero.url}
           alt="主视角"
-          onClick={() => onZoom(hero.url)}
+          onClick={() => onZoom(hero.url, urls)}
           className="mb-2 max-h-80 w-full cursor-zoom-in rounded-lg object-contain ring-1 ring-signal/40 transition hover:brightness-105"
           title="点击放大"
         />
@@ -125,7 +132,7 @@ function ViewSet({ group, onZoom }: { group: DeliveryGroup; onZoom: (url: string
               <img
                 src={v.url}
                 alt={viewLabel(v.view)}
-                onClick={() => onZoom(v.url)}
+                onClick={() => onZoom(v.url, urls)}
                 className={`h-24 w-28 cursor-zoom-in rounded-md object-cover ring-1 transition hover:brightness-105 ${v.status === 'weak' ? 'ring-amber-500/50' : 'ring-ink-700'}`}
                 title="点击放大"
               />
@@ -451,7 +458,8 @@ export default function Workbench() {
   const [input, setInput] = useState('');
   const [files, setFiles] = useState<File[]>([]);
   const [uploading, setUploading] = useState(false);
-  const [preview, setPreview] = useState<string | null>(null);
+  const [selectingCandidate, setSelectingCandidate] = useState<string | null>(null);
+  const [preview, setPreview] = useState<PreviewState | null>(null);
   const [editor, setEditor] = useState<{ footprint: { length: number; width: number }; modules: LayoutModule[]; openings?: string[] } | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -575,6 +583,21 @@ export default function Workbench() {
     }
   };
 
+  const selectCandidate = async (assetId?: string) => {
+    if (!assetId || busy || selectingCandidate) return;
+    setSelectingCandidate(assetId);
+    try {
+      const r = await fetch(`/api/projects/${projectId}/assets/${assetId}/promote`, { method: 'POST' });
+      if (!r.ok) throw new Error('promote failed');
+      await refreshState();
+      await refreshProjects();
+    } catch {
+      alert('选择候选图失败，请稍后重试。');
+    } finally {
+      setSelectingCandidate(null);
+    }
+  };
+
   // 打开布局编辑器，预填所选方案的布局（present_choices 的 layout → 可编辑模块）
   const openEditor = (layout: BoothLayout) => {
     setEditor({
@@ -593,7 +616,7 @@ export default function Workbench() {
         body: JSON.stringify({ png: dataUrl }),
       });
       const d = (await r.json()) as { assetId?: string };
-      if (d.assetId) void send(`已用布局编辑器定稿平面图（参考资产 ${d.assetId}）。请用 render（planAssetId=该参考资产）按这张平面图的布局出 3D 效果图全套。`);
+      if (d.assetId) void send(`已用布局编辑器定稿平面图（参考资产 ${d.assetId}）。请用 render（planAssetId=该参考资产，views=[]，n=2，autoCheck=false）按这张平面图先生成两张首稿主图候选，暂时不要出多视角/俯视/自动精修，等我选择基准图后再继续。`);
     } catch {
       /* ignore */
     }
@@ -606,7 +629,7 @@ export default function Workbench() {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ decision: 'skipped' }),
     }).finally(() => {
-      void send('不精调了，按原方案的布局直接出图。请调用 render 给中文意图出 3D 效果图全套。');
+      void send('不精调了，按原方案的布局直接出图。请调用 render（views=[]，n=2，autoCheck=false）先生成两张首稿主图候选，暂时不要出多视角/俯视/自动精修，等我选择基准图后再继续。');
     });
   };
 
@@ -640,6 +663,39 @@ export default function Workbench() {
   const isRendering = ['render', 'revise_asset'].includes(activeTool);
 
   const assets = (state?.assets ?? []).slice().reverse();
+  const deliveryPreviewUrls = useMemo(
+    () => messages.flatMap((m) => (m.role === 'assistant' ? extractDeliveries(m.parts).flatMap((g) => g.items.map((i) => i.url)) : [])),
+    [messages],
+  );
+  const allPreviewUrls = useMemo(() => uniqueUrls([...deliveryPreviewUrls, ...assets.map((a) => a.url), ...filePreviews]), [deliveryPreviewUrls, assets, filePreviews]);
+  const openPreview = useCallback<OpenPreview>(
+    (url: string, urls?: Array<string | null | undefined>) => {
+      const scoped = uniqueUrls(urls?.length ? urls : allPreviewUrls);
+      const nextUrls = scoped.length ? scoped : [url];
+      const idx = nextUrls.indexOf(url);
+      setPreview({ urls: nextUrls, index: idx >= 0 ? idx : 0, zoom: 1 });
+    },
+    [allPreviewUrls],
+  );
+  const shiftPreview = useCallback((delta: number) => {
+    setPreview((p) => (p && p.urls.length > 1 ? { ...p, index: (p.index + delta + p.urls.length) % p.urls.length, zoom: 1 } : p));
+  }, []);
+  const zoomPreview = useCallback((delta: number) => {
+    setPreview((p) => (p ? { ...p, zoom: clampZoom(p.zoom + delta) } : p));
+  }, []);
+  useEffect(() => {
+    if (!preview) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setPreview(null);
+      else if (e.key === 'ArrowLeft') shiftPreview(-1);
+      else if (e.key === 'ArrowRight') shiftPreview(1);
+      else if (e.key === '+' || e.key === '=') zoomPreview(0.2);
+      else if (e.key === '-') zoomPreview(-0.2);
+      else if (e.key === '0') setPreview((p) => (p ? { ...p, zoom: 1 } : p));
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [preview, shiftPreview, zoomPreview]);
   // 新建的空项目还没落盘（listProjects 扫不到），前端补一个置顶项以便高亮显示
   const shownProjects = projects.some((p) => p.id === projectId)
     ? projects
@@ -789,7 +845,7 @@ export default function Workbench() {
                         if (fp.mediaType?.startsWith('image/') && fp.url) {
                           return (
                             // eslint-disable-next-line @next/next/no-img-element
-                            <img key={i} src={fp.url} alt="附件" onClick={() => setPreview(fp.url!)} className="max-h-44 cursor-zoom-in rounded-lg ring-1 ring-ink-700 transition hover:ring-accent/60" title="点击放大" />
+                            <img key={i} src={fp.url} alt="附件" onClick={() => openPreview(fp.url!)} className="max-h-44 cursor-zoom-in rounded-lg ring-1 ring-ink-700 transition hover:ring-accent/60" title="点击放大" />
                           );
                         }
                         return (
@@ -831,19 +887,22 @@ export default function Workbench() {
 
                     {deliveries.map((g, gi) =>
                       g.grouped ? (
-                        <ViewSet key={gi} group={g} onZoom={setPreview} />
+                        <ViewSet key={gi} group={g} onZoom={openPreview} />
                       ) : (
-                        <div key={gi} className="mt-1 flex w-full flex-wrap gap-3">
-                          {g.items.map((img) => {
+                        <div key={gi} className={`mt-1 w-full gap-3 ${g.type === 'candidate-set' ? 'grid sm:grid-cols-2' : 'flex flex-wrap'}`}>
+                          {g.items.map((img, ii) => {
                             const rec = img.recommended;
+                            const candidate = g.type === 'candidate-set';
+                            const selected = !!img.assetId && state?.baseAssetId === img.assetId;
+                            const groupUrls = g.items.map((item) => item.url);
                             return (
                               <figure key={img.url} className="group relative m-0">
                                 {/* eslint-disable-next-line @next/next/no-img-element */}
                                 <img
                                   src={img.url}
                                   alt="交付结果"
-                                  onClick={() => setPreview(img.url)}
-                                  className={`max-h-96 cursor-zoom-in rounded-xl ring-1 transition group-hover:brightness-105 ${rec ? 'ring-signal/40' : 'ring-ink-700'}`}
+                                  onClick={() => openPreview(img.url, groupUrls)}
+                                  className={`max-h-96 cursor-zoom-in rounded-xl object-contain ring-1 transition group-hover:brightness-105 ${candidate ? 'w-full' : ''} ${rec ? 'ring-signal/40' : 'ring-ink-700'}`}
                                   title="点击放大"
                                 />
                                 <figcaption
@@ -852,8 +911,18 @@ export default function Workbench() {
                                   }`}
                                 >
                                   {rec && <span className="inline-block h-1.5 w-1.5 rounded-full bg-signal" />}
-                                  {rec ? '推荐交付' : '交付'}
+                                  {candidate ? `候选 ${ii + 1}` : rec ? '推荐交付' : '交付'}
                                 </figcaption>
+                                {candidate && (
+                                  <button
+                                    type="button"
+                                    disabled={!img.assetId || busy || selectingCandidate != null || selected}
+                                    onClick={() => void selectCandidate(img.assetId)}
+                                    className="u-press mt-2 w-full rounded-lg border border-accent/50 bg-accent-soft px-3 py-1.5 text-[12px] text-accent disabled:opacity-40"
+                                  >
+                                    {selected ? '已选为基准' : selectingCandidate === img.assetId ? '登记中…' : '选为基准'}
+                                  </button>
+                                )}
                               </figure>
                             );
                           })}
@@ -899,7 +968,7 @@ export default function Workbench() {
                           <img
                             src={url}
                             alt={f.name}
-                            onClick={() => setPreview(url)}
+                            onClick={() => openPreview(url, filePreviews)}
                             className="h-14 w-14 cursor-zoom-in rounded-lg object-cover ring-1 ring-ink-700"
                             title="点击放大"
                           />
@@ -1000,7 +1069,7 @@ export default function Workbench() {
             {assets.map((a, idx) => (
               <figure key={a.id} className="u-tap group m-0 overflow-hidden rounded-lg border border-ink-800 bg-ink-900 hover:border-ink-600">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={a.url} alt={a.kind} onClick={() => setPreview(a.url)} className="w-full cursor-zoom-in transition group-hover:brightness-105" title="点击放大" />
+                <img src={a.url} alt={a.kind} onClick={() => openPreview(a.url, assets.map((asset) => asset.url))} className="w-full cursor-zoom-in transition group-hover:brightness-105" title="点击放大" />
                 <figcaption className="flex items-center justify-between px-2.5 py-2">
                   <span className="flex items-center gap-1.5">
                     <span className="mono-tag text-ink-600">#{String(assets.length - idx).padStart(2, '0')}</span>
@@ -1021,10 +1090,42 @@ export default function Workbench() {
       {preview && (
         <div onClick={() => setPreview(null)} className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-ink-950/92 p-8 backdrop-blur-sm">
           <div className="mono-tag mb-3 flex items-center gap-2 text-ink-400">
-            <span className="h-1.5 w-1.5 rounded-full bg-accent" /> 预览 · 点击任意处关闭
+            <span className="h-1.5 w-1.5 rounded-full bg-accent" />
+            预览 · {preview.index + 1}/{preview.urls.length} · {Math.round(preview.zoom * 100)}%
           </div>
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={preview} alt="预览" className="max-h-[82vh] max-w-full rounded-xl ring-1 ring-ink-700 shadow-2xl shadow-black/70" />
+          <div className="mb-3 flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+            <button type="button" onClick={() => shiftPreview(-1)} disabled={preview.urls.length < 2} className="u-tap rounded-lg border border-ink-700 bg-ink-850 px-3 py-1.5 text-[12px] text-ink-200 disabled:opacity-35" title="上一张">
+              ←
+            </button>
+            <button type="button" onClick={() => zoomPreview(-0.2)} className="u-tap rounded-lg border border-ink-700 bg-ink-850 px-3 py-1.5 text-[12px] text-ink-200" title="缩小">
+              -
+            </button>
+            <button type="button" onClick={() => setPreview((p) => (p ? { ...p, zoom: 1 } : p))} className="u-tap rounded-lg border border-ink-700 bg-ink-850 px-3 py-1.5 text-[12px] text-ink-200" title="重置缩放">
+              1:1
+            </button>
+            <button type="button" onClick={() => zoomPreview(0.2)} className="u-tap rounded-lg border border-ink-700 bg-ink-850 px-3 py-1.5 text-[12px] text-ink-200" title="放大">
+              +
+            </button>
+            <button type="button" onClick={() => shiftPreview(1)} disabled={preview.urls.length < 2} className="u-tap rounded-lg border border-ink-700 bg-ink-850 px-3 py-1.5 text-[12px] text-ink-200 disabled:opacity-35" title="下一张">
+              →
+            </button>
+          </div>
+          <div
+            onClick={(e) => e.stopPropagation()}
+            onWheel={(e) => {
+              e.preventDefault();
+              zoomPreview(e.deltaY < 0 ? 0.15 : -0.15);
+            }}
+            className="flex max-h-[82vh] w-full max-w-[92vw] items-center justify-center overflow-auto"
+          >
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={preview.urls[preview.index]}
+              alt="预览"
+              style={{ transform: `scale(${preview.zoom})` }}
+              className="origin-center rounded-xl ring-1 ring-ink-700 shadow-2xl shadow-black/70 transition-transform"
+            />
+          </div>
         </div>
       )}
 

@@ -7,7 +7,7 @@ import { falTextToImage, generateImageFromRefs } from './gateway';
  * openai / seedream / gemini 是**预留接口**——调用即抛清晰错误，绝不伪造实现。
  * 未知 `IMAGE_PROVIDER` 值 → `getImageProviderName()` 抛错（避免误以为走了别的 provider，见 DECISIONS D31）。
  *
- * fal 内部：文生图 = fal gpt-image-2；参考条件化 = fal gpt-image-2/edit，失败回退 Gemini（逻辑在 gateway）。
+ * fal 内部：文生图 = fal gpt-image-2；参考条件化 = fal gpt-image-2/edit。
  * 留这层是为了以后能在**一个地方**接 OpenAI 官方直连 / Vercel Gateway / Seedream，而不改 render 业务逻辑。
  */
 export type ImageQuality = 'low' | 'medium' | 'high';
@@ -61,7 +61,7 @@ export function getImageProviderName(): ImageProviderName {
 export const getImageModel = (name: ImageProviderName = getImageProviderName()): string => PROVIDER_MODEL[name];
 
 // —— provider 实现 ——
-/** fal gpt-image-2 provider（含 fal-edit→Gemini fallback，逻辑在 gateway.generateImageFromRefs）。 */
+/** fal gpt-image-2 provider（文生图 + 参考条件化 / 图编辑）。 */
 export const falImageProvider: ImageProvider = {
   name: 'fal',
   textToImage: (prompt, opts) => falTextToImage(prompt, opts),

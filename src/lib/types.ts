@@ -99,6 +99,14 @@ export interface Asset {
 export interface DesignSpec {
   narrative: string; // 给用户看的中文方案
   identity?: string; // 身份锁定串（基础信息 schema 的文字版）：尺寸/开口/各功能区位置/部件含数量/形状/材质/配色 hex/品牌占位——跨视图 + 跨次生成的一致性锚，每次生图强制前置
+  footprint?: {
+    shape: 'rectangle' | 'l-shape' | 'custom';
+    dimensions?: { length?: number; width?: number };
+    source: 'user' | 'default';
+    boundaryRule: string;
+    allowChamfer: boolean;
+    allowCurvedPerimeter: boolean;
+  };
   invariants: string[]; // 跨视图不可变量（多视图一致性用）
   selfCheckCriteria: string; // 供 inspect 的客观判图要点（"输出 vs spec"）
   updatedAt: string;
@@ -240,6 +248,7 @@ export interface ProjectState {
   assets: Asset[];
   attachments?: Attachment[];
   selectedAttachments?: AttachmentUseRef[]; // D33：被选入方案/生图输入的素材（轻量追踪层）
+  baseAssetId?: string; // 用户从首稿候选中选定的当前方案基准图；后续深化默认只基于它
   runs?: RunSummary[];
   updatedAt: string;
 }
@@ -268,7 +277,7 @@ export interface DeliverableAsset {
   score?: number; // 判图分（质量或一致性）
 }
 
-export type DeliverableType = 'single' | 'view-set' | 'plan-conditioned' | 'revision';
+export type DeliverableType = 'single' | 'candidate-set' | 'view-set' | 'plan-conditioned' | 'revision';
 
 export interface Deliverable {
   type: DeliverableType;

@@ -58,8 +58,8 @@
 └───────┬─────────────────────┘         │  prompt 模式库        │
         │                                └──────────────────────┘
 ┌───────▼──────────────────────────────────────────┐
-│  模型层  Gateway: opus-4.8(脑/判图/写prompt) /     │
-│          gemini(参考 fallback) ‖ fal.ai: gpt-image-2│
+│  模型层  Gateway: opus-4.8(脑/判图/写prompt/清理)  │
+│          ‖ fal.ai: gpt-image-2 ‖ DashScope: ASR    │
 │          ‖ DashScope: ASR(直连)        〔as-built〕  │
 └───────┬───────────────────────────────────────────┘
         │
@@ -69,7 +69,7 @@
 └───────────────────────────────────────────────────┘
 ```
 
-**主数据流（一次完整请求）**：用户意图 → API → Orchestrator 进入循环 → （信息不足？`read_project_state` + 推理 rubric → 提问）→（信息足？写 `DesignSpec` → `generate_booth_image`）→ `inspect_result`（Sonnet 4.6 看图 vs spec）→ 有偏差则 Opus 写纠正 prompt → `revise_asset`（gpt-image-2 编辑）→ 再 inspect → 通过 → `task_complete` → 交付。用户只感知两端。
+**主数据流（一次完整请求）**：用户意图 → API → Orchestrator 进入循环 → （信息不足？`read_project_state` + 推理 rubric → 卡片提问）→（信息足？写 `DesignSpec`，含 identity + footprint 外轮廓硬规则）→ `present_layout` 让用户确认/跳过布局 → `render(views=[], n=2, autoCheck=false)` 出首稿候选 → 用户点选基准图写入 `baseAssetId` → 如用户要多视角/俯视/精修，再基于 `baseAssetId` 深化 → `task_complete` → 交付。
 
 ---
 
@@ -122,13 +122,13 @@ rhemos/
 | 类 | 工具 | 输入（要点）| 模型 | approval | 说明 |
 |---|---|---|---|---|---|
 | A | `analyze_reference` | imageRef(s) | Opus 4.8 vision | 否 | 抽风格/结构/品牌特征 → 写入 spec 素材 |
-| A | `generate_booth_image` | spec/prompt, size, count | gpt-image-2 | 否 | 主视图/概念图；独立请求，回传本地 URL |
-| A | `render_multiview` | assetId, views[] | 委派 consistency subagent | 否 | 多视图 + 一致性校验 |
-| B | `inspect_result` | assetId, specId | Sonnet 4.6 vision | 否 | 输出 vs spec 的结构化批评（按自检 rubric）|
-| B | `read_project_state` | — | — | 否 | 读 brief/spec/资产清单（gap 分析依据）|
+| A | `render` | intent / views / planAssetId / n / quality / autoCheck | gpt-image-2(fal) + Opus prompt-writer | 否 | 唯一生图入口；默认首稿 `candidate-set`，用户选 `baseAssetId` 后再多视角深化 |
+| B | `read_project_state` | — | — | 否 | 读 brief/spec/layout/baseAssetId/资产清单（gap 分析依据）|
+| B | `present_choices` | questions + layout options | — | 否 | 卡片提问与布局草图 |
+| B | `present_layout` | layout | — | 否 | 方案后让用户确认/跳过布局 |
 | C | `revise_asset` | assetId, fixPrompt | gpt-image-2 edit | 否（可逆）| 定向编辑重生 |
-| C | `discard_asset` | assetId | — | 视情况 | 丢弃不合格产出 |
-| C | `update_spec` | patch | — | 否 | 更新 DesignSpec / 强类型 brief 字段 |
+| C | `update_brief` | facts patch | — | 否 | 更新业务记忆 |
+| C | `update_spec` | narrative / identity / footprint / invariants / criteria | — | 否 | 更新 DesignSpec / 外轮廓硬规则 |
 | C | `task_complete` | summary, delivered[], gaps[] | — | 否 | 显式收尾，触发循环退出 |
 
 **生图与推理会话隔离**：A/C 类生图工具在 `execute` 内**起独立模型请求**，生成后只把本地 URL + 简短元数据回传主脑，避免把图片 token 灌进推理上下文。
@@ -161,7 +161,7 @@ type BoothBrief = {
 ```
 
 ### 4.2 DesignSpec（"成熟方案"产物 —— 用户不写、大脑写）
-桥接 `brief → 给用户看的方案 → 生图 prompt → 自检基准`。一份 spec 同时是人读的方案和机读的生图依据；`inspect_result` 用它做"输出 vs spec"硬对比。
+桥接 `brief → 给用户看的方案 → 生图 prompt → 外轮廓硬规则 → 按需诊断基准`。一份 spec 同时是人读的方案和机读的生图依据；`render(autoCheck=true)` 或后续诊断工具可用它做"输出 vs spec"硬对比。
 
 ```ts
 type DesignSpec = {
@@ -182,13 +182,8 @@ stopWhen: [
   stepCountIs(40),           // 硬上限，仅防失控
 ]
 
-// prepareStep（model-tiering.ts，示意）
-prepareStep: ({ steps }) => {
-  const lastTool = lastToolName(steps);
-  if (lastTool === 'inspect_result') return { model: 'anthropic/claude-sonnet-4.6' };
-  return { model: 'anthropic/claude-opus-4.8' };
-  // 也可在此收窄 tools、压缩早期生图日志
-}
+// 当前实现：主脑 / prompt-writer / 按需 inspect 均走 Opus 4.8；
+// 生图经 fal.ai gpt-image-2，ASR 经 DashScope。
 ```
 
 ### 4.4 自省闭环（核心价值，伪代码）—— 自检全程对用户隐形（见 domain-knowledge §0 判断 2）
@@ -196,17 +191,19 @@ prepareStep: ({ steps }) => {
 loop (大脑自主):
   state = read_project_state()
   if brief 不完备 (按 questioning rubric 做 gap 分析):
-      问最高价值的 1-3 个缺口（具体可视化选项）; continue
+      present_choices 问最高价值的 1-3 个缺口（具体可视化选项）; continue
   if 无 spec:
-      spec = 写 DesignSpec(brief + skills + analyze_reference); update_spec; continue
-  depth = 大脑按"这次的分量"定(概念→N=1; 最终交付→N=2~3 且允许修复)
-  assets = generate_booth_image(spec, count=depth.N)          # 并行 best-of-N
-  best = argmax over assets of inspect_result(a, spec)         # Sonnet 4.6 静默判图择优
-  if best 有 fail 级客观硬伤 and depth 允许修复:
-      fix = Opus 写定向纠正 prompt(仅针对客观硬伤, 采样对的部分)
-      best = revise_asset(best, fix)                           # gpt-image-2 隐形定向编辑(≤1次)
-  task_complete(静默交付 best, 不出报告)                       # 用户只收到成品
-  # 仅当遇到"必须用户拍板的真实抉择"(非质量问题)才在 loop 中用一句自然问话开口
+      spec = 写 DesignSpec(brief + skills + analyze_reference + footprint); update_spec; continue
+  if layout 未 confirmed/skipped:
+      present_layout; 等用户确认或跳过; continue
+  if 无 baseAssetId:
+      render(views=[], n=2, autoCheck=false)                   # 并发首稿候选 candidate-set
+      等用户点选基准图; continue
+  if 用户明确要多视角/俯视/深化:
+      render(views=[...], n=1, autoCheck=false)                # 基于 baseAssetId 参考条件化
+  if 用户明确要求诊断/修正:
+      render(..., autoCheck=true) 或 revise_asset(...)
+  task_complete(交付用户选定/深化后的结果)
 ```
 
 ---
@@ -221,33 +218,33 @@ loop (大脑自主):
 - **验收**：opus-4.8 与 gpt-image-2 经 Gateway 跑通、图片存本地并读出；inspector 候选有一份判图命中率对比并选定默认值。
 
 ### Phase 1 · 最小可行 Loop Agent
-- [ ] 装 `analyze_reference` + `generate_booth_image` + `inspect_result` + `read_project_state` + `task_complete`
+- [ ] 装 `analyze_reference` + `render` + `read_project_state` + `present_choices` + `update_brief` + `update_spec` + `task_complete`
 - [ ] orchestrator：`stopWhen`、`prepareStep` 模型分层、system prompt v1（注入精简 skills + questioning rubric）
 - [ ] `useChat` + AI Elements `Conversation`/`Tool` 链路；本地 storage
 - **验收**：发请求 → 看到工具调用与自省过程 → 拿到结果；**大脑能正确分解 + 调度 + 智能提问**（诉求 1、2 初步成立）。
 
 ### Phase 2 · 自省闭环（核心价值主张）· 横向优先
 > **实测（2026-06-14）**：4 张 gpt-image-2 并行 = 墙钟 82s ≈ 单张（串行需 279s），4/4 成功无 429。**Gateway 真并发** → best-of-N 几乎不增延迟。另：1024×1024 ~50-82s，远快于 1536×1024 ~190s（画幅决定速度）。
-- [ ] **best-of-N 并行生图（主力杠杆）**：`generate_booth_variants(prompt|prompts, n)` 内部 `Promise.all` 并行 N 张；inspect 也并行；静默择优交付。**横向抽奖优先于纵向重试。**
-- [ ] DesignSpec 写作 + `update_spec`（存 project state，供 inspect 做"输出 vs spec"硬对比）
-- [ ] `revise_asset`（gpt-image-2 编辑模式）作**窄回退**：仅对择优后仍存的客观硬伤定向修 ≤1 次
+- [x] **首稿候选并行生图**：`render(views=[], n=2, autoCheck=false)` 内部 `Promise.all` 并行两张；候选先交给用户选基准，不默认 AI 筛掉。
+- [x] DesignSpec 写作 + `update_spec`（存 project state，含 identity + footprint 外轮廓硬规则 + selfCheckCriteria）
+- [x] `revise_asset`（gpt-image-2 编辑模式）作**按需窄回退**：用户要求修正时只改一处硬伤
 - [ ] 正式预算 `budget.ts`（替换 Phase 1 兜底）+ **并发上限 + 429 退避**；大脑按"分量"选 N 与画幅（概念 1-2@1024 ~60s；最终 4-6@1536 并行 + 择优）
 - [ ] inspection rubric 完整化；system prompt v2
-- **验收**：大脑能「写方案 → 并行 N 张 → 静默判图择优 → 必要时定向修 1 次 → 交付」自主跑完，且总延迟接近单张。
+- **验收**：大脑能「写方案 → 并行两张首稿候选 → 用户选基准 → 按需深化/修正 → 交付」跑通，且首稿总延迟接近单张。
 
-### Phase 3 · 多视图（单图 turnaround sheet）· 实测定型
+### Phase 3 · 多视图（历史：单图 turnaround sheet；已被 D34 基准图多视角替代）
 > 实测（`scripts/multiview-spike.mjs`）：`images.edit` 图像条件化经 Gateway **404 不可用**；单图 sheet 一次渲染**天然一致**(Sonnet 72，胜分图)。故**弃 rhemax 全套锁定机制**（不再做 identity-spec 重注入/坐标锚图/失败重试/十几轮 subagent）。
-- [x] `render_multiview_sheet` 工具：best-of-N 出 2×2 turnaround sheet（前/左/右/俯视平面，**high/1536；默认 n=1 提速，可设 2 择优**）→ Sonnet 判（同一展台 + 角度分明 + 平面合理）择优 → 交付。
+- [x] 历史 `render_multiview_sheet` 工具已废弃：当前多视角走 `render(views=[...])`，且必须先由用户选 `baseAssetId`。
 - [x] 重写 `src/knowledge/skills/multiview.md`：sheet prompt 模板（**强制角度分明 + 平面图**），删除锁定机制。
 - [x] 注册工具 + system-prompt 告知大脑何时用（用户要"多视角全貌"）；单张 money shot 仍走 hero best-of-N。
 - [ ] （暂缓）per-角度独立高清重绘：用户满意 sheet 后再单独高清化。
-- **验收**：✅ 一句"给我多视角全貌" → 大脑出一张四视角自洽的 sheet。
+- **验收（当前）**：用户先选定首稿基准图，再说"给我多视角/俯视" → 大脑基于 `baseAssetId` 出单视角全幅图。
 
 ### Phase 4 · 产品骨架（隔离 + 用户可见层边界）· 据架构批评优化
 > 走向产品的第一优先级不是加模型能力，而是**隔离 / 沉淀 / 边界**。以下都不依赖部署决定。
 - [x] **ASR 语音输入**（Fun-ASR 直连 + DeepSeek V4 Flash 清理 + 录音前端 `VoiceInputButton`）。
 - [x] **projectId 隔离落地**：storage 从单一 `DEFAULT_PROJECT` 改 projectId-keyed（`.data/projects/<id>/`）；projectId 入 URL（`/projects/:projectId`）并注入工具 `experimental_context`。左侧项目面板：列表 / 切换载入 / 新建 / 删除 / 当前高亮。最小 Run 记录已落地；完整队列/取消/重试仍归 Phase 5。
-- [x] **inspection 沉淀回 asset**：`generate_best_of_n`/`revise_asset`/`render_multiview_sheet` 判图结果经 `addInspection` 写回 `Asset.inspections`，修了"判完不写回 → `read_project_state` 永远空"的真 bug。
+- [x] **inspection 沉淀回 asset**：`render(autoCheck=true)` / `revise_asset` 的判图结果可经 `addInspection` 写回 `Asset.inspections`，修了"判完不写回 → `read_project_state` 永远空"的真 bug。
 - [x] **用户态 / 调试态 UI 分层**：三栏工作台（项目面板 / 对话 / 资产画廊）；交付图进对话气泡（"✓ 推荐"标记），工具过程默认隐藏、**调试开关**才露；**用户级进度旁白**（"正在整理方案/生成候选/筛选/修正结构"），不露评分。
 - [x] **多模态上传**（计划外补充）：上传先资产化为轻量引用；图片/PDF（Opus 原生）+ Word（mammoth 提取正文+内嵌图）+ Excel（ExcelJS 转 CSV），服务端 `src/lib/attachments.ts` 按需预处理；附件 Claude 式缩略图 / 悬浮预览 / 单击放大 / 文件卡片。
 - [x] **轻并发安全**：per-project 写锁（`withLock`，进程内串行化 state.json 写）。
@@ -267,7 +264,7 @@ loop (大脑自主):
 ## 6. 风险与对策
 | 风险 | 对策 |
 |---|---|
-| **视觉自检的 UX 陷阱**（旧团队曾因此废弃 QC）| 自检**全程内部、对用户隐形**：预防(prompt 纪律)为主 + 静默 best-of-N 择优 + 仅客观硬伤触发隐形修复；**绝不向用户出报告或逼其二次操作**；客观缺陷自动处理、主观口味走自然对话；深度由大脑按分量自定。用 Sonnet 4.6 vision 提升判图可靠性。Phase 2 重点验证 |
+| **视觉自检的 UX 陷阱**（旧团队曾因此废弃 QC）| 当前默认把首稿选择权交给用户：`candidate-set` 两张候选先选基准，AI 判图/一致性检查只在用户要求诊断时启用；避免把半成品报告、自动重试和冗余图堆给用户。 |
 | **成本放大**（Opus 全程 + 自主重试）| prepareStep 模型分层（自检走 Sonnet）；每资产 revise≤3 硬预算；预算让大脑看见 |
 | **自由 → 乱跑/过度提问** | system prompt 给决策框架 + questioning rubric 约束提问数（≤3）；step 硬上限兜底 |
 | **gpt-image-2 调用细节未定** | Phase 0 spike 先锁定（size/编辑/参考图/多图）再开发上层 |

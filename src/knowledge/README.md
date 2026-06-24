@@ -21,17 +21,17 @@ knowledge/
 │  ├─ prompt-craft.md           # 生图 prompt 五层架构 + 两张表 + 批次/负向
 │  ├─ prompt-examples.md        # 生图 prompt few-shot 范例（实战英文展台 prompt）
 │  ├─ reference-and-editing.md  # 参考图/附件理解 + 语义/蒙版编辑
-│  └─ multiview.md              # 多视角一致性（进化式参考链 + 判图门控；每视角单视角全幅，非四宫格 sheet）
+│  └─ multiview.md              # 多视角一致性（用户选基准图 + 参考条件化；每视角单视角全幅，非四宫格 sheet）
 └─ rubrics/
    ├─ questioning.md            # 提问完备度（gap 分析表，非脚本）
-   └─ inspection.md             # 生图自检（隐形三用法：预防/择优/修复）
+   └─ inspection.md             # 生图检查（生成前预防为主；生成后诊断按需启用）
 ```
 
 ## 大脑怎么用（约定）
 
 - **始终加载**：`persona` + `booth-fundamentals`（人设与物理底线）。
 - **按需加载**（`prepareStep` 按上下文关键词选，省 token）：触及空间→`space-opening-circulation`；触及高度/顶部→`height-structure-truss`；写方案→`design-method` + `rubrics/questioning`；写 prompt→`prompt-craft` + `styles` + `brand-assets`；有参考图/改图→`reference-and-editing`；多视角→`multiview`。
-- **两个 rubric 是判断工具不是台词**：`questioning` 用于"此刻该问什么"的 gap 分析；`inspection` 用于"生成前自律 / 生成后静默择优 / 仅客观硬伤隐形修复"，**全程对用户隐形、不出报告**。
+- **两个 rubric 是判断工具不是台词**：`questioning` 用于"此刻该问什么"的 gap 分析；`inspection` 默认用于"生成前自律"，生成后 AI 诊断/筛选/修复只在用户明确要求时启用。
 
 ## 完成计划（待后续精修）
 

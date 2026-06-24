@@ -1,6 +1,6 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { MODEL_IDS, withRenderStyle } from '@/models/gateway';
+import { DEFAULT_IMAGE_QUALITY, MODEL_IDS, withRenderStyle } from '@/models/gateway';
 import { imageProvider, resolveActiveImageProvider } from '@/models/image-providers';
 import { addInspection, appendRunEvent, loadAssetBytes, projectIdFromContext, readState, recordRunDeliverable, runIdFromContext, saveAsset, saveRenderInputSnapshot } from '@/lib/storage';
 import { selectUsableAttachmentsFromAnalyses, toRenderInputRefs } from '@/lib/asset-analysis';
@@ -40,12 +40,13 @@ export const reviseAsset = tool({
     const selAtt = s.selectedAttachments?.length ? s.selectedAttachments : await selectUsableAttachmentsFromAnalyses(pid);
     const attRefs = toRenderInputRefs(selAtt, s.attachments ?? []);
     const attIds = attRefs.map((r) => r.id);
+    const q = DEFAULT_IMAGE_QUALITY;
     const snap = await saveRenderInputSnapshot(pid, {
       runId,
       mode: 'revise',
       provider: providerName,
       model: imageModel,
-      quality: 'high', // revise 走 fal edit 默认 high/1024
+      quality: q,
       size: '1024x1024',
       prompt: instruction,
       intent: fix,
@@ -55,10 +56,10 @@ export const reviseAsset = tool({
       refs: [...attRefs, parentRef],
     });
     const t0 = Date.now();
-    const bytes = await imageProvider.editFromRefs([parentBytes], instruction);
+    const bytes = await imageProvider.editFromRefs([parentBytes], instruction, { quality: q, size: '1024x1024' });
     const durationMs = Date.now() - t0;
     if (!bytes) return { error: '局部修复未返回图（编辑模型无输出）' };
-    const asset = await saveAsset(pid, bytes, { kind: 'booth-image', prompt: `revise: ${fix}`, parentId: parentAssetId, provider: providerName, model: imageModel, quality: 'high', size: '1024x1024', mode: 'revise', durationMs, renderInputId: snap.id, sourceAssetIds: [parentAssetId], sourceAttachmentIds: attIds });
+    const asset = await saveAsset(pid, bytes, { kind: 'booth-image', prompt: `revise: ${fix}`, parentId: parentAssetId, provider: providerName, model: imageModel, quality: q, size: '1024x1024', mode: 'revise', durationMs, renderInputId: snap.id, sourceAssetIds: [parentAssetId], sourceAttachmentIds: attIds });
     const insp = await inspectImage(bytes, criteria);
     await addInspection(pid, asset.id, toInspectionResult(insp, MODEL_IDS.inspect));
     // 统一交付协议（D24 契约①）：单张修订图。
@@ -69,7 +70,7 @@ export const reviseAsset = tool({
       ...(insp.fails.length ? { issues: insp.fails } : {}),
     };
     await recordRunDeliverable(pid, runId, deliverable);
-    await appendRunEvent(pid, runId, { type: 'tool', toolName: 'revise_asset', outputSummary: { provider: providerName, model: imageModel, mode: 'revise', durationMs } });
+    await appendRunEvent(pid, runId, { type: 'tool', toolName: 'revise_asset', outputSummary: { provider: providerName, model: imageModel, mode: 'revise', quality: q, durationMs } });
     return deliverable;
   },
 });
