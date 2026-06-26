@@ -9,6 +9,7 @@ import remarkGfm from 'remark-gfm';
 import VoiceInputButton from '@/components/VoiceInputButton';
 import dynamic from 'next/dynamic';
 import type { LayoutModule } from '@/components/LayoutEditor';
+import BrushEditor, { type BrushEditorResult } from '@/components/BrushEditor';
 import type { DeliverableAsset } from '@/lib/types';
 
 // react-konva 用 canvas，禁用 SSR
@@ -20,7 +21,23 @@ interface Asset {
   url: string;
   prompt?: string;
   parentId?: string;
+  name?: string;
+  pinned?: boolean;
 }
+
+// 对话框待发送附件（文件 / 资产引用 / 已涂抹三态合一）。
+// file 永远存在（字节来源）；assetId 有则来自资产库（inpaint 走 assetId）；
+// mask/painted 有则已用画笔涂抹（painted=给用户看的红痕预览，mask=黑白发给模型）。
+type Pending = {
+  id: string;
+  file: File;
+  url: string; // 原图 object URL（画笔在此之上涂）
+  name: string;
+  isImage: boolean;
+  assetId?: string;
+  mask?: string | null; // 黑白蒙版 data URL
+  painted?: string | null; // 原图+红痕预览 data URL
+};
 interface ProjectState {
   id: string;
   assets: Asset[];
@@ -60,6 +77,18 @@ type OpenPreview = (url: string, urls?: Array<string | null | undefined>) => voi
 
 const uniqueUrls = (urls: Array<string | null | undefined>): string[] => Array.from(new Set(urls.filter((u): u is string => !!u)));
 const clampZoom = (z: number): number => Math.min(4, Math.max(0.5, Number(z.toFixed(2))));
+
+/** File → data URL（inpaint 发非资产图用）。 */
+function fileToDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result));
+    r.onerror = reject;
+    r.readAsDataURL(file);
+  });
+}
+const randAttId = () => `pa-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
+const ASSET_DND_MIME = 'application/x-rhemos-asset';
 
 // 英文视角名 → 中文短标
 function viewLabel(view?: string): string {
@@ -173,6 +202,11 @@ const PaperclipIcon = ({ className }: IP) => (
 const PlusIcon = ({ className }: IP) => (
   <svg className={className} width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
     <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
+  </svg>
+);
+const BrushIcon = ({ className }: IP) => (
+  <svg className={className} width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M12 20h9" /><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z" />
   </svg>
 );
 const SendIcon = ({ className }: IP) => (
@@ -496,7 +530,11 @@ export default function Workbench() {
   const [state, setState] = useState<ProjectState | null>(null);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [input, setInput] = useState('');
-  const [files, setFiles] = useState<File[]>([]);
+  const [pending, setPending] = useState<Pending[]>([]);
+  const [brushArmed, setBrushArmed] = useState(false); // “修改画笔”按钮激活：等用户点一张待发图
+  const [brushTarget, setBrushTarget] = useState<Pending | null>(null); // 正在涂抹的附件
+  const [dragOver, setDragOver] = useState(false);
+  const [assetMenu, setAssetMenu] = useState<{ asset: Asset; x: number; y: number } | null>(null); // 资产右键菜单
   const [uploading, setUploading] = useState(false);
   const [selectingCandidate, setSelectingCandidate] = useState<string | null>(null);
   const [renderElapsed, setRenderElapsed] = useState(0);
@@ -551,13 +589,38 @@ export default function Workbench() {
     }
   }, [status, refreshState, refreshProjects]);
   /* eslint-enable react-hooks/set-state-in-effect */
-  // 待发送图片附件的本地预览 URL：用 useMemo 派生（不在 effect 里 setState），
-  // 单独的 cleanup effect 在 files 变化 / 组件卸载时 revoke 上一批，避免内存泄漏。
-  const filePreviews = useMemo(
-    () => files.map((f) => (f.type.startsWith('image/') ? URL.createObjectURL(f) : null)),
-    [files],
-  );
-  useEffect(() => () => filePreviews.forEach((u) => u && URL.revokeObjectURL(u)), [filePreviews]);
+  // 待发送附件增删：每个 pending 在加入时建一个原图 object URL，移除/清空时 revoke（避免泄漏）。
+  const addFiles = useCallback((picked: File[]) => {
+    if (!picked.length) return;
+    setPending((cur) => [
+      ...cur,
+      ...picked.map((f) => ({ id: randAttId(), file: f, url: URL.createObjectURL(f), name: f.name, isImage: f.type.startsWith('image/') })),
+    ]);
+  }, []);
+  const addAssetRef = useCallback(async (assetId: string, assetUrl: string, name: string) => {
+    try {
+      const res = await fetch(assetUrl);
+      const blob = await res.blob();
+      const type = blob.type || 'image/png';
+      const file = new File([blob], name || `${assetId}.png`, { type });
+      setPending((cur) => [...cur, { id: randAttId(), file, url: URL.createObjectURL(file), name: file.name, isImage: type.startsWith('image/'), assetId }]);
+    } catch {
+      alert('载入资产失败，请重试。');
+    }
+  }, []);
+  const removePending = useCallback((id: string) => {
+    setPending((cur) => {
+      const t = cur.find((p) => p.id === id);
+      if (t) URL.revokeObjectURL(t.url);
+      return cur.filter((p) => p.id !== id);
+    });
+  }, []);
+  const clearPending = useCallback(() => {
+    setPending((cur) => {
+      cur.forEach((p) => URL.revokeObjectURL(p.url));
+      return [];
+    });
+  }, []);
   // 切换 / 重载项目：先清空（避免串项目残留），再拉取该项目的对话历史恢复 messages
   useEffect(() => {
     let cancelled = false;
@@ -598,25 +661,61 @@ export default function Workbench() {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
   }, [messages, busy]);
 
-  const uploadFiles = async (pending: File[]): Promise<FileUIPart[]> => {
-    if (!pending.length) return [];
+  const uploadFiles = async (list: File[]): Promise<FileUIPart[]> => {
+    if (!list.length) return [];
     const fd = new FormData();
-    pending.forEach((f) => fd.append('files', f));
+    list.forEach((f) => fd.append('files', f));
     const r = await fetch(`/api/projects/${projectId}/attachments`, { method: 'POST', body: fd });
     if (!r.ok) throw new Error('attachment upload failed');
     const d = (await r.json()) as { files?: FileUIPart[] };
     return d.files ?? [];
   };
 
-  const send = async (text: string) => {
-    if ((!text.trim() && files.length === 0) || busy) return;
-    const pending = files;
+  // 涂抹局部编辑：直连 /inpaint（不经大脑），结果作为一对消息追加进对话（持久化进历史）。
+  const sendInpaint = async (p: Pending, text: string) => {
     setUploading(true);
     try {
-      const uploaded = await uploadFiles(pending);
+      const instruction = text.trim() || '按涂抹的区域修改这部分';
+      const body = p.assetId
+        ? { assetId: p.assetId, mask: p.mask, instruction }
+        : { originalImage: await fileToDataUrl(p.file), mask: p.mask, instruction };
+      const r = await fetch(`/api/projects/${projectId}/inpaint`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+      const d = (await r.json()) as { asset?: { url?: string }; error?: string };
+      const resultUrl = d.asset?.url;
+      if (!r.ok || !resultUrl) throw new Error(d.error || 'edit failed');
+      const userParts: unknown[] = [{ type: 'text', text: `${text.trim() || '局部修改'}（画笔涂抹区域）` }];
+      // 仅资产图带上"原图"引用（用可持久化的 /api/assets URL，不放 blob/base64 进历史）。
+      if (p.assetId) userParts.push({ type: 'file', mediaType: 'image/png', url: `/api/assets/${p.assetId}?project=${projectId}`, filename: '原图' });
+      setMessages((prev) => [
+        ...prev,
+        { id: randAttId(), role: 'user', parts: userParts } as unknown as (typeof prev)[number],
+        { id: randAttId(), role: 'assistant', parts: [{ type: 'text', text: '已按涂抹区域局部修改：' }, { type: 'file', mediaType: 'image/png', url: resultUrl }] } as unknown as (typeof prev)[number],
+      ]);
+      setInput('');
+      clearPending();
+      await refreshState();
+      await refreshProjects();
+    } catch (e) {
+      alert(`局部修改失败：${e instanceof Error ? e.message : '请重试'}`);
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const send = async (text: string) => {
+    if ((!text.trim() && pending.length === 0) || busy) return;
+    // 有涂抹图 → 走局部编辑（直连，不经大脑）；多张涂抹时取第一张。
+    const painted = pending.find((p) => p.mask);
+    if (painted) {
+      void sendInpaint(painted, text);
+      return;
+    }
+    setUploading(true);
+    try {
+      const uploaded = await uploadFiles(pending.map((p) => p.file));
       void sendMessage({ text: text.trim() || '（请看附件）', files: uploaded }).catch(() => alert('发送失败，请稍后重试。'));
       setInput('');
-      setFiles([]);
+      clearPending();
     } catch {
       alert('附件上传失败，请稍后重试。');
     } finally {
@@ -640,6 +739,76 @@ export default function Workbench() {
       setSelectingCandidate(null);
     }
   };
+
+  // 画笔涂抹：点开（armed 模式下点某张待发图触发）→ 确认回填 mask/painted（用户只见 painted 这张）。
+  const openBrush = useCallback((p: Pending) => {
+    setBrushArmed(false);
+    setBrushTarget(p);
+  }, []);
+  const handleBrushConfirm = useCallback(
+    (res: BrushEditorResult) => {
+      setPending((cur) => cur.map((p) => (brushTarget && p.id === brushTarget.id ? { ...p, mask: res.maskDataUrl, painted: res.paintedDataUrl } : p)));
+      setBrushTarget(null);
+    },
+    [brushTarget],
+  );
+  // 拖入对话框：资产库图（自定义 MIME）→ addAssetRef；操作系统文件 → addFiles。
+  const onComposerDrop = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      setDragOver(false);
+      const assetRaw = e.dataTransfer.getData(ASSET_DND_MIME);
+      if (assetRaw) {
+        try {
+          const a = JSON.parse(assetRaw) as { assetId: string; url: string; name?: string };
+          void addAssetRef(a.assetId, a.url, a.name ?? a.assetId);
+          return;
+        } catch {
+          /* 非资产载荷，继续看文件 */
+        }
+      }
+      const dropped = Array.from(e.dataTransfer.files ?? []);
+      if (dropped.length) addFiles(dropped);
+    },
+    [addAssetRef, addFiles],
+  );
+  // 资产右键菜单动作
+  const renameAssetUi = useCallback(
+    async (a: Asset) => {
+      setAssetMenu(null);
+      const name = window.prompt('重命名这张图：', a.name || '');
+      if (name == null) return;
+      try {
+        await fetch(`/api/projects/${projectId}/assets/${a.id}/rename`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name }) });
+        await refreshState();
+        await refreshProjects();
+      } catch {
+        alert('重命名失败，请重试。');
+      }
+    },
+    [projectId, refreshState, refreshProjects],
+  );
+  const togglePinUi = useCallback(
+    async (a: Asset) => {
+      setAssetMenu(null);
+      try {
+        await fetch(`/api/projects/${projectId}/assets/${a.id}/pin`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ pinned: !a.pinned }) });
+        await refreshState();
+      } catch {
+        alert('置顶失败，请重试。');
+      }
+    },
+    [projectId, refreshState],
+  );
+  // 右键“修改画笔”快捷：把该资产送进对话框 + 激活画笔，用户点它即可涂抹。
+  const brushFromAsset = useCallback(
+    (a: Asset) => {
+      setAssetMenu(null);
+      void addAssetRef(a.id, a.url, a.name || a.kind);
+      setBrushArmed(true);
+    },
+    [addAssetRef],
+  );
 
   // 打开布局编辑器，预填所选方案的布局（present_choices 的 layout → 可编辑模块）
   const openEditor = (layout: BoothLayout) => {
@@ -767,7 +936,11 @@ export default function Workbench() {
     return () => clearInterval(t);
   }, [isRendering]);
 
-  const assets = (state?.assets ?? []).slice().reverse();
+  // 资产库排序：置顶浮到最前，组内新在前。
+  const assets = (state?.assets ?? [])
+    .map((a, i) => ({ a, i }))
+    .sort((x, y) => (y.a.pinned ? 1 : 0) - (x.a.pinned ? 1 : 0) || y.i - x.i)
+    .map((x) => x.a);
   // 服务端状态显形（状态条）：当前基准图 + 布局状态，让用户随时知道「进行到哪了」。
   const baseAsset = state?.baseAssetId ? state.assets.find((a) => a.id === state.baseAssetId) : undefined;
   const layoutStatusLabel =
@@ -776,7 +949,7 @@ export default function Workbench() {
     () => messages.flatMap((m) => (m.role === 'assistant' ? extractDeliveries(m.parts).flatMap((g) => g.items.map((i) => i.url)) : [])),
     [messages],
   );
-  const allPreviewUrls = useMemo(() => uniqueUrls([...deliveryPreviewUrls, ...assets.map((a) => a.url), ...filePreviews]), [deliveryPreviewUrls, assets, filePreviews]);
+  const allPreviewUrls = useMemo(() => uniqueUrls([...deliveryPreviewUrls, ...assets.map((a) => a.url), ...pending.filter((p) => p.isImage).map((p) => p.painted ?? p.url)]), [deliveryPreviewUrls, assets, pending]);
   const openPreview = useCallback<OpenPreview>(
     (url: string, urls?: Array<string | null | undefined>) => {
       const scoped = uniqueUrls(urls?.length ? urls : allPreviewUrls);
@@ -1091,37 +1264,38 @@ export default function Workbench() {
         {/* composer */}
         <div className="shrink-0 px-6 pb-6 pt-2">
           <div className="mx-auto max-w-3xl">
-            {files.length > 0 && (
+            {brushArmed && (
+              <div className="mb-1.5 rounded-lg border border-accent/40 bg-accent-soft/30 px-3 py-1.5 text-[12px] text-accent">
+                ✎ 画笔已就绪：点上方任意图片，圈出要修改的区域。
+              </div>
+            )}
+            {pending.length > 0 && (
               <div className="mb-2 flex flex-wrap gap-2">
-                {files.map((f, i) => {
-                  const url = filePreviews[i];
-                  const ext = (f.name.split('.').pop() || 'file').toUpperCase();
+                {pending.map((p) => {
+                  const thumb = p.painted ?? (p.isImage ? p.url : null);
+                  const ext = (p.name.split('.').pop() || 'file').toUpperCase();
+                  const armable = brushArmed && p.isImage;
                   return (
-                    <div key={i} className="group relative">
-                      {url ? (
-                        <>
-                          {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img
-                            src={url}
-                            alt={f.name}
-                            onClick={() => openPreview(url, filePreviews)}
-                            className="h-14 w-14 cursor-zoom-in rounded-lg object-cover ring-1 ring-ink-700"
-                            title="点击放大"
-                          />
-                          <div className="pointer-events-none absolute bottom-full left-0 z-30 mb-2 hidden group-hover:block">
-                            {/* eslint-disable-next-line @next/next/no-img-element */}
-                            <img src={url} alt="" className="max-h-64 max-w-xs rounded-lg ring-1 ring-ink-600 shadow-2xl shadow-black/60" />
-                          </div>
-                        </>
+                    <div key={p.id} className="group relative">
+                      {thumb ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={thumb}
+                          alt={p.name}
+                          onClick={() => (armable ? openBrush(p) : openPreview(thumb))}
+                          className={`h-14 w-14 rounded-lg object-cover ring-1 transition ${armable ? 'cursor-crosshair ring-accent ring-2' : p.mask ? 'cursor-zoom-in ring-accent' : 'cursor-zoom-in ring-ink-700'}`}
+                          title={armable ? '点此涂抹修改' : p.mask ? '已涂抹（再点"画笔"可继续编辑）' : '点击放大'}
+                        />
                       ) : (
-                        <div className="flex h-14 w-48 items-center gap-2.5 rounded-lg border border-ink-700 bg-ink-850 px-2.5" title={f.name}>
+                        <div className="flex h-14 w-44 items-center gap-2.5 rounded-lg border border-ink-700 bg-ink-850 px-2.5" title={p.name}>
                           <div className="mono-tag grid h-9 w-9 shrink-0 place-items-center rounded-md bg-accent-soft text-accent">{ext.slice(0, 4)}</div>
-                          <span className="truncate text-[12px] text-ink-200">{f.name}</span>
+                          <span className="truncate text-[12px] text-ink-200">{p.name}</span>
                         </div>
                       )}
+                      {p.mask && thumb && <span className="mono-tag pointer-events-none absolute bottom-0.5 left-0.5 rounded bg-accent/90 px-1 text-[9px] text-ink-950">已涂抹</span>}
                       <button
                         type="button"
-                        onClick={() => setFiles(files.filter((_, j) => j !== i))}
+                        onClick={() => removePending(p.id)}
                         title="移除"
                         className="absolute -right-1.5 -top-1.5 z-10 hidden h-5 w-5 items-center justify-center rounded-full bg-ink-700 text-ink-100 ring-2 ring-ink-900 hover:bg-signal group-hover:flex"
                       >
@@ -1133,7 +1307,15 @@ export default function Workbench() {
               </div>
             )}
 
-            <div className="u-tap rounded-2xl border border-ink-700 bg-ink-850 p-2.5 focus-within:border-accent/60 focus-within:shadow-[0_0_0_3px] focus-within:shadow-accent/10">
+            <div
+              onDragOver={(e) => {
+                e.preventDefault();
+                if (!dragOver) setDragOver(true);
+              }}
+              onDragLeave={() => setDragOver(false)}
+              onDrop={onComposerDrop}
+              className={`u-tap rounded-2xl border bg-ink-850 p-2.5 focus-within:shadow-[0_0_0_3px] focus-within:shadow-accent/10 ${dragOver ? 'border-accent ring-2 ring-accent/40' : 'border-ink-700 focus-within:border-accent/60'}`}
+            >
               <textarea
                 ref={inputRef}
                 value={input}
@@ -1146,7 +1328,7 @@ export default function Workbench() {
                   }
                 }}
                 rows={1}
-                placeholder="描述你的展台需求，或粘贴 / 上传参考资料…"
+                placeholder="描述需求，或把资产图拖进来 / 上传参考资料…"
                 className="max-h-40 min-h-[40px] w-full resize-none bg-transparent px-2 py-1.5 text-[14px] leading-relaxed text-ink-50 outline-none placeholder:text-ink-500"
               />
               <div className="mt-1 flex items-center gap-1.5">
@@ -1158,11 +1340,11 @@ export default function Workbench() {
                   accept="image/*,.pdf,.docx,.xlsx,.xls"
                   className="sr-only"
                   onChange={(e) => {
-                    // 必须先同步读出文件再清空：setFiles 的 updater 是延迟闭包，
+                    // 必须先同步读出文件再清空：addFiles 的 updater 是延迟闭包，
                     // 若在其中读 e.target.files 会读到被下一行 value='' 清空后的空列表（经典 React 事件陷阱）。
                     const picked = Array.from(e.target.files ?? []);
                     e.target.value = '';
-                    if (picked.length) setFiles((cur) => [...cur, ...picked]);
+                    addFiles(picked);
                   }}
                 />
                 <label
@@ -1172,12 +1354,22 @@ export default function Workbench() {
                 >
                   <PaperclipIcon />
                 </label>
+                <button
+                  type="button"
+                  onClick={() => setBrushArmed((v) => !v)}
+                  disabled={busy || !pending.some((p) => p.isImage)}
+                  title="修改画笔 — 涂抹图片局部进行修改（先点此，再点一张待发图）"
+                  className={`u-tap flex h-9 shrink-0 items-center gap-1 rounded-lg px-2 text-[12px] ${brushArmed ? 'bg-accent text-ink-950' : 'text-ink-400 hover:bg-ink-700 hover:text-ink-100'} disabled:opacity-40`}
+                >
+                  <BrushIcon />
+                  <span className="hidden sm:inline">画笔</span>
+                </button>
                 <VoiceInputButton disabled={busy} onTranscribed={(t) => setInput((c) => (c.trim() ? `${c.trim()} ${t}` : t))} />
                 <span className="mono-tag ml-auto hidden text-ink-600 sm:block">Enter 发送 · Shift+Enter 换行</span>
                 <button
                   type="button"
                   onClick={() => void send(input)}
-                  disabled={busy || (!input.trim() && files.length === 0)}
+                  disabled={busy || (!input.trim() && pending.length === 0)}
                   className="u-press flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-accent text-ink-950 transition hover:bg-accent-deep disabled:bg-ink-700 disabled:text-ink-500"
                   title="发送"
                 >
@@ -1203,16 +1395,28 @@ export default function Workbench() {
           )}
           <div className="flex flex-col gap-3">
             {assets.map((a, idx) => (
-              <figure key={a.id} className="u-tap group m-0 overflow-hidden rounded-lg border border-ink-800 bg-ink-900 hover:border-ink-600">
+              <figure
+                key={a.id}
+                draggable
+                onDragStart={(e) => {
+                  e.dataTransfer.setData(ASSET_DND_MIME, JSON.stringify({ assetId: a.id, url: a.url, name: a.name || a.kind }));
+                  e.dataTransfer.effectAllowed = 'copy';
+                }}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  setAssetMenu({ asset: a, x: e.clientX, y: e.clientY });
+                }}
+                className="u-tap group m-0 cursor-grab overflow-hidden rounded-lg border border-ink-800 bg-ink-900 hover:border-ink-600"
+              >
                 {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={a.url} alt={a.kind} onClick={() => openPreview(a.url, assets.map((asset) => asset.url))} className="w-full cursor-zoom-in transition group-hover:brightness-105" title="点击放大" />
-                <figcaption className="flex items-center justify-between px-2.5 py-2">
-                  <span className="flex items-center gap-1.5">
-                    <span className="mono-tag text-ink-600">#{String(assets.length - idx).padStart(2, '0')}</span>
-                    {idx === 0 && <span className="mono-tag rounded bg-accent-soft px-1.5 py-0.5 text-accent">最新</span>}
-                    <span className="text-[11px] text-ink-300">{assetKindLabel(a.kind)}</span>
+                <img src={a.url} alt={a.kind} onClick={() => openPreview(a.url, assets.map((asset) => asset.url))} className="w-full cursor-zoom-in transition group-hover:brightness-105" title="拖到对话框作输入 · 右键更多 · 点击放大" />
+                <figcaption className="flex items-center justify-between gap-2 px-2.5 py-2">
+                  <span className="flex min-w-0 items-center gap-1.5">
+                    <span className="mono-tag shrink-0 text-ink-600">#{String(assets.length - idx).padStart(2, '0')}</span>
+                    {a.pinned && <span className="mono-tag shrink-0 rounded bg-accent-soft px-1 py-0.5 text-accent">置顶</span>}
+                    <span className="truncate text-[11px] text-ink-300">{a.name || assetKindLabel(a.kind)}</span>
                   </span>
-                  <a href={a.url} download className="u-tap rounded-md p-1 text-ink-400 hover:bg-ink-800 hover:text-ink-100" title="下载">
+                  <a href={a.url} download className="u-tap shrink-0 rounded-md p-1 text-ink-400 hover:bg-ink-800 hover:text-ink-100" title="下载">
                     <DownloadIcon />
                   </a>
                 </figcaption>
@@ -1221,6 +1425,30 @@ export default function Workbench() {
           </div>
         </div>
       </aside>
+
+      {/* ───────── 资产右键菜单 ───────── */}
+      {assetMenu && (
+        <>
+          <div className="fixed inset-0 z-[55]" onClick={() => setAssetMenu(null)} onContextMenu={(e) => { e.preventDefault(); setAssetMenu(null); }} />
+          <div
+            className="fixed z-[56] w-40 overflow-hidden rounded-lg border border-ink-700 bg-ink-850 py-1 text-[13px] shadow-2xl shadow-black/60"
+            style={{ left: Math.min(assetMenu.x, (typeof window !== 'undefined' ? window.innerWidth : 9999) - 168), top: Math.min(assetMenu.y, (typeof window !== 'undefined' ? window.innerHeight : 9999) - 176) }}
+          >
+            <button type="button" onClick={() => brushFromAsset(assetMenu.asset)} className="flex w-full items-center gap-2 px-3 py-2 text-left text-ink-200 hover:bg-ink-800">
+              <BrushIcon className="text-ink-400" /> 修改画笔
+            </button>
+            <a href={assetMenu.asset.url} download onClick={() => setAssetMenu(null)} className="flex w-full items-center gap-2 px-3 py-2 text-left text-ink-200 hover:bg-ink-800">
+              <DownloadIcon className="text-ink-400" /> 下载
+            </a>
+            <button type="button" onClick={() => void renameAssetUi(assetMenu.asset)} className="flex w-full items-center gap-2 px-3 py-2 text-left text-ink-200 hover:bg-ink-800">
+              ✏️ 重命名
+            </button>
+            <button type="button" onClick={() => void togglePinUi(assetMenu.asset)} className="flex w-full items-center gap-2 px-3 py-2 text-left text-ink-200 hover:bg-ink-800">
+              {assetMenu.asset.pinned ? '↧ 取消置顶' : '↥ 置顶'}
+            </button>
+          </div>
+        </>
+      )}
 
       {/* ───────── lightbox ───────── */}
       {preview && (
@@ -1263,6 +1491,15 @@ export default function Workbench() {
             />
           </div>
         </div>
+      )}
+
+      {brushTarget && (
+        <BrushEditor
+          imageUrl={brushTarget.url}
+          initialMaskDataUrl={brushTarget.mask ?? null}
+          onConfirm={handleBrushConfirm}
+          onCancel={() => setBrushTarget(null)}
+        />
       )}
 
       {editor && (
