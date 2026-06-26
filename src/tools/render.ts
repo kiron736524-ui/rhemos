@@ -1,24 +1,23 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { DEFAULT_IMAGE_QUALITY, MAX_PARALLEL_IMAGES, MODEL_IDS, withRenderStyle } from '@/models/gateway';
-import { imageProvider, resolveActiveImageProvider } from '@/models/image-providers';
+import { DEFAULT_IMAGE_QUALITY, MAX_PARALLEL_IMAGES, withRenderStyle } from '@/models/gateway';
+import { imageProvider, IMAGE_PROVIDER, IMAGE_MODEL } from '@/models/image-providers';
 import { checkBoothLayout, failMessages, hasBlocker, type BoothRuleIssue } from '@/lib/booth-rules';
 import { cadPromptLock } from '@/lib/cad';
-import { addInspection, appendRunEvent, loadAssetBytes, markLayoutConfirmed, projectIdFromContext, readState, recordRunDeliverable, runIdFromContext, saveAsset, saveCandidateAsset, saveRenderInputSnapshot } from '@/lib/storage';
+import { appendRunEvent, loadAssetBytes, markLayoutConfirmed, projectIdFromContext, readState, recordRunDeliverable, runIdFromContext, saveAsset, saveCandidateAsset, saveRenderInputSnapshot } from '@/lib/storage';
 import { selectUsableAttachmentsFromAnalyses, toRenderInputRefs } from '@/lib/asset-analysis';
-import { inspectImage, inspectConsistency, toInspectionResult, consistencyToInspectionResult } from '@/agent/inspect';
 import { writeImagePrompt } from '@/agent/prompt-writer';
 import type { Deliverable, DeliverableAsset, RenderInputOperation, RenderInputRef } from '@/lib/types';
 
-const GATE = 70; // 进化链一致性门控（漂移图不进参考池）
 const MAX_VIEWS = 4; // 单次视角硬上限（事前预算边界）
 const MAX_IMAGES_PER_RENDER = 10; // 单工具内部硬预算：挡住 stopWhen 之前的跑飞
 
 // 唯一生图入口（首稿候选 / 用户选定基准后的多视角 / 平面图条件化）。大脑只给中文意图，
-// prompt-writer 子 agent 写英文 prompt；identity / 判图要点自读 spec；出口统一 Deliverable。
+// prompt-writer 子 agent 写英文 prompt；identity 自读 spec；出口统一 Deliverable。
+// 判图 / 打分已删除（D39）：候选不再自动评分，由用户手动选基准；多视角走"进化式参考链"（保留，无门控）。
 export const render = tool({
   description:
-    '出展台效果图（**唯一生图入口**）。你只给**中文意图**（要出什么、视觉重点、风格倾向），不用写英文 prompt——内部 prompt 专家会写。默认首稿只生成 candidate-set：views=[]、final 默认 n=2、autoCheck=false，候选图不会进入正式资产库，必须等用户点选基准图后再深化。给 views 时只会使用用户已选 baseAssetId 作为参考生成多视角；没有基准图会拒绝。给 planAssetId 时按该平面图为硬参考先出首稿候选。identity、外轮廓硬规则与判图要点自动读 spec。返回统一交付物。',
+    '出展台效果图（**唯一生图入口**，gpt-image-2 / fal）。你只给**中文意图**（要出什么、视觉重点、风格倾向），不用写英文 prompt——内部 prompt 专家会写。默认首稿只生成 candidate-set：views=[]、final 默认 n=2，候选图不会进入正式资产库，必须等用户点选基准图后再深化。给 views 时只会使用用户已选 baseAssetId 作为参考，按"进化式参考链"串行出多视角（每张以 基准图 + 已生成视角 为累积参考，保持一致）；没有基准图会拒绝。给 planAssetId 时按该平面图为硬参考先出首稿候选。identity 与外轮廓硬规则自动读 spec。返回统一交付物。',
   inputSchema: z.object({
     intent: z
       .string()
@@ -35,10 +34,9 @@ export const render = tool({
       .describe('concept=早期方向探索（默认 medium/n=1，快，可无 spec）；final=最终交付（本地测试默认 medium/n=2，必须已有 spec.identity 且布局已确认或明确跳过）'),
     quality: z.enum(['low', 'medium', 'high']).optional().describe('画质；留空=medium（本地测试提速）。用户明确要更快草图才显式压到 low'),
     size: z.enum(['1024x1024', '1536x1024', '1024x1536']).default('1024x1024'),
-    n: z.number().int().min(1).max(MAX_PARALLEL_IMAGES).optional().describe('每张图 best-of-N 候选数；留空=按 mode 取默认（concept→1，final→2）。实测单次方差大，final 用 2 择优'),
-    autoCheck: z.boolean().default(false).describe('是否启用 Opus 判图/一致性检查。默认 false，把选择权交还用户；只有明确要 AI 诊断时打开'),
+    n: z.number().int().min(1).max(MAX_PARALLEL_IMAGES).optional().describe('每张图 best-of-N 候选数；留空=按 mode 取默认（concept→1，final→2）。实测单次方差大，final 用 2 给用户挑'),
   }),
-  execute: async ({ intent, views, planAssetId, mode, quality, size, n, autoCheck }, opts) => {
+  execute: async ({ intent, views, planAssetId, mode, quality, size, n }, opts) => {
     const ctx = (opts as { experimental_context?: unknown }).experimental_context;
     const pid = projectIdFromContext(ctx);
     const runId = runIdFromContext(ctx);
@@ -50,20 +48,13 @@ export const render = tool({
         ? `Booth outer footprint shape is a STRICT RECTANGLE, exactly ${s.layout.proposal.length}m x ${s.layout.proposal.width}m. The raised platform, carpet/floor finish edge, truss perimeter, back wall line, and booth boundary must be one unbroken rectilinear outline with four 90-degree corners. Do NOT create a hexagonal, octagonal, chamfered, diagonal-cut, curved, notched, stepped, bitten-out, protruding, warped, or polygonal outer perimeter. No random add-on floor islands, no corner bulges, and no facade piece may extend outside the rectangle unless the user explicitly requested that irregular shape. Any circular route, ring feature, totem, standee, or decorative feature is an interior design element only, never the booth outline.`
         : 'Booth outer footprint shape is a STRICT RECTANGLE with four 90-degree corners unless the user explicitly requested an irregular custom perimeter. The platform/carpet edge and truss perimeter must be one unbroken rectangle: no hexagonal, octagonal, chamfered, diagonal-cut, curved, notched, stepped, bitten-out, protruding, warped, add-on, or polygonal outer perimeter. Totems and standees are interior elements only.');
     const promptIdentity = identity.includes('FOOTPRINT BOUNDARY HARD RULE') ? identity : `${identity}\n\nFOOTPRINT BOUNDARY HARD RULE: ${footprintRule}`;
-    const criteria = s.spec?.selfCheckCriteria || intent; // 没 spec 时用 intent 兜底判图要点
     // 本地测试：所有模式默认 medium，避免 high 的长等待；n 仍按 mode 控制候选数量。
     // schema 不设 quality/n 默认，默认在此按 mode 解析——显式传入则尊重，避免 Zod default 与系统提示打架。
     const q: 'low' | 'medium' | 'high' = quality ?? DEFAULT_IMAGE_QUALITY;
     const nn = n ?? (views.length ? 1 : mode === 'concept' ? 1 : 2);
-    // 解析激活的图像 provider（IMAGE_PROVIDER，默认 fal）；未知/未实现在此返回清晰错误（早于生图的 .catch 包裹）。
-    let providerName: string, imageModel: string;
-    try {
-      const p = resolveActiveImageProvider();
-      providerName = p.name;
-      imageModel = p.model;
-    } catch (e) {
-      return { error: e instanceof Error ? e.message : String(e), code: 'IMAGE_PROVIDER_INVALID' };
-    }
+    // 生图渠道 / 模型已锁定 gpt-image-2 / fal（见 image-providers.ts），仅作元数据记录。
+    const providerName = IMAGE_PROVIDER;
+    const imageModel = IMAGE_MODEL;
     let totalGenMs = 0; // 累计各批次生图墙钟，记入 run 事件
     if (views.length > MAX_VIEWS) views = views.slice(0, MAX_VIEWS);
     const requestedImages = nn * (views.length ? views.length : 1);
@@ -127,11 +118,11 @@ export const render = tool({
     console.log(`[render] mode=${mode}/${plan ? 'plan' : views.length ? 'views' : 'single'} views=${views.length} n=${nn} q=${q} 预计生图≈${requestedImages} 张`);
 
     // ② 首稿候选：只落候选文件，不进正式资产库；用户选中后再 promote 入库。
-    const heroCands: { bytes: Uint8Array; assetId: string; url: string; score: number; failN: number }[] = [];
+    const heroCands: { bytes: Uint8Array; assetId: string; url: string }[] = [];
     if (views.length && baseAsset) {
       const baseBytes = await loadAssetBytes(pid, baseAsset.id).catch(() => null);
       if (!baseBytes) return { error: `找不到用户选定的基准资产 ${baseAsset.id}` };
-      heroCands.push({ bytes: baseBytes, assetId: baseAsset.id, url: baseAsset.url, score: 0, failN: 0 });
+      heroCands.push({ bytes: baseBytes, assetId: baseAsset.id, url: baseAsset.url });
     } else if (plan) {
       const instr = withRenderStyle(
         `${promptIdentity}\n\n${layoutLock ? `${layoutLock}\n\n` : ''}The attached image is a TOP-DOWN FLOOR PLAN of this exhibition booth — each labeled block is a functional zone at its real position and size. Render a photorealistic 3D booth that EXACTLY follows this floor plan (every zone's position, footprint, size and shape must match, including L-shaped counters). The booth OUTER PERIMETER must remain the footprint shape specified in the identity; do not stylize the platform or truss perimeter into a polygon. ${frontPrompt}`,
@@ -146,9 +137,8 @@ export const render = tool({
       totalGenMs += genMs;
       if (!raw.length) return { error: '主图生成失败（按平面图）' };
       for (const b of raw) {
-        const insp = autoCheck ? await inspectImage(b, criteria, { projectId: pid, runId, purpose: 'plan-conditioned candidate check' }) : null;
-        const a = await saveCandidateAsset(pid, b, { kind: 'booth-image', prompt: 'plan-conditioned front candidate', parentId: effectivePlanAssetId, inspections: insp ? [toInspectionResult(insp, MODEL_IDS.inspect)] : undefined, provider: providerName, model: imageModel, quality: q, size, mode, durationMs: genMs, renderInputId: snap.id, sourceAssetIds: planId ? [planId] : [], sourceAttachmentIds: attIds });
-        heroCands.push({ bytes: b, assetId: a.id, url: a.url, score: insp?.score ?? 0, failN: insp?.fails.length ?? 0 });
+        const a = await saveCandidateAsset(pid, b, { kind: 'booth-image', prompt: 'plan-conditioned front candidate', parentId: effectivePlanAssetId, provider: providerName, model: imageModel, quality: q, size, mode, durationMs: genMs, renderInputId: snap.id, sourceAssetIds: planId ? [planId] : [], sourceAttachmentIds: attIds });
+        heroCands.push({ bytes: b, assetId: a.id, url: a.url });
       }
     } else {
       const full = withRenderStyle(`${promptIdentity}\n\n${layoutLock ? `${layoutLock}\n\n` : ''}${frontPrompt}`);
@@ -161,12 +151,11 @@ export const render = tool({
       totalGenMs += genMs;
       if (!raw.length) return { error: '主图生成失败（无返回）' };
       for (const b of raw) {
-        const insp = autoCheck ? await inspectImage(b, criteria, { projectId: pid, runId, purpose: 'text-to-image candidate check' }) : null;
-        const a = await saveCandidateAsset(pid, b, { kind: 'booth-image', prompt: `${frontPrompt} candidate`, inspections: insp ? [toInspectionResult(insp, MODEL_IDS.inspect)] : undefined, provider: providerName, model: imageModel, quality: q, size, mode, durationMs: genMs, renderInputId: snap.id, sourceAttachmentIds: attIds });
-        heroCands.push({ bytes: b, assetId: a.id, url: a.url, score: insp?.score ?? 0, failN: insp?.fails.length ?? 0 });
+        const a = await saveCandidateAsset(pid, b, { kind: 'booth-image', prompt: `${frontPrompt} candidate`, provider: providerName, model: imageModel, quality: q, size, mode, durationMs: genMs, renderInputId: snap.id, sourceAttachmentIds: attIds });
+        heroCands.push({ bytes: b, assetId: a.id, url: a.url });
       }
     }
-    heroCands.sort((x, y) => x.failN - y.failN || y.score - x.score);
+    // 判图/打分已删除：候选不再排序，首张即推荐项，由用户从候选集里手动选基准。
     const hero = heroCands[0];
 
     // ③ 无 views → 首稿候选集：用户选中后才进入正式资产库
@@ -175,19 +164,17 @@ export const render = tool({
         assetId: c.assetId,
         url: c.url,
         role: 'candidate',
-        status: i === 0 ? 'recommended' : c.failN === 0 ? 'ok' : 'weak',
-        score: c.score,
+        status: i === 0 ? 'recommended' : 'ok',
       }));
-      const singleIssues = [...ruleMsgs, ...(autoCheck && hero.failN ? [`主图有 ${hero.failN} 处客观待改`] : [])];
-      const single: Deliverable = { type: 'candidate-set', assets, recommendedId: hero.assetId, ...(singleIssues.length ? { issues: singleIssues } : {}) };
+      const single: Deliverable = { type: 'candidate-set', assets, recommendedId: hero.assetId, ...(ruleMsgs.length ? { issues: ruleMsgs } : {}) };
       await recordRunDeliverable(pid, runId, single);
       await appendRunEvent(pid, runId, { type: 'tool', toolName: 'render', outputSummary: { provider: providerName, model: imageModel, mode, quality: q, size, images: assets.length, durationMs: totalGenMs } });
       return single;
     }
 
-    // ④ 有 views → 默认并发：每个视角只吃用户选定基准图（和可选平面图），避免漂移图继续污染后续视角。
-    // 只有用户明确打开 autoCheck 时，才使用串行进化链，把通过一致性门控的视角加入参考池。
-    const assets: DeliverableAsset[] = [{ assetId: hero.assetId, url: hero.url, role: 'hero', status: 'recommended', score: hero.score }];
+    // ④ 有 views → 进化式参考链（保留，D39）：串行生成，每张视角以 [（平面图）+ 基准图 + 已生成视角] 为累积参考池。
+    // 判图门控已删除——每张生成的视角都直接进参考池；漂移可能沿链传染，属已知取舍（用户确认接受，后续再优化）。
+    const assets: DeliverableAsset[] = [{ assetId: hero.assetId, url: hero.url, role: 'hero', status: 'recommended' }];
     const issues: string[] = [];
     const refPool: Uint8Array[] = plan ? [plan, hero.bytes] : [hero.bytes];
     const heroRef: RenderInputRef = { id: hero.assetId, kind: 'asset', role: 'previous_render', url: hero.url };
@@ -198,57 +185,26 @@ export const render = tool({
         `${promptIdentity}\n\n${layoutLock ? `${layoutLock}\n\n` : ''}Using the attached reference image(s) of THIS exact exhibition booth, render the SAME booth from ${view}. The references are geometry and identity locks, not loose inspiration. Keep every structural part, material, color, brand placement, furniture COUNT, exact outer footprint boundary stated above, raised platform/carpet rectangle, truss perimeter, wall line, and lighting identical to the reference(s); only the camera viewpoint changes. The booth boundary must stay a clean unbroken rectangle with four 90-degree corners unless the identity explicitly says otherwise: no notches, protrusions, chamfers, diagonal bites, warped corners, add-on floor islands, or polygonal platform/truss outline. Freestanding totems / standees are slim rectangular interior signage boards only, never wall extensions and never part of the outer footprint. Do NOT add, remove, move, darken, clutter, or redesign anything.`,
       );
 
-    if (!autoCheck) {
-      const baseRefs = refPool.slice();
-      const baseMeta = refMeta.slice();
-      const batchT0 = Date.now();
-      const results = await Promise.all(
-        views.map(async (view) => {
-          const instr = viewInstruction(view);
-          const snap = await snapshot('view-generation', instr, baseMeta.slice(), view);
-          const t0 = Date.now();
-          const cands = (await Promise.all(Array.from({ length: nn }, () => imageProvider.editFromRefs(baseRefs, instr, { quality: q, size }).catch(() => null)))).filter(
-            (b): b is Uint8Array => b !== null,
-          );
-          const genMs = Date.now() - t0;
-          if (!cands.length) return { asset: { assetId: '', url: '', role: 'view', view, status: 'failed' } satisfies DeliverableAsset, issue: `${view}：生成失败` };
-          const a = await saveAsset(pid, cands[0], { kind: 'booth-image', prompt: `${view} (base-ref parallel)`, parentId: hero.assetId, provider: providerName, model: imageModel, quality: q, size, mode, durationMs: genMs, renderInputId: snap.id, sourceAssetIds: baseMeta.map((r) => r.id).filter(Boolean), sourceAttachmentIds: attIds });
-          return { asset: { assetId: a.id, url: a.url, role: 'view', view, status: 'ok' } satisfies DeliverableAsset };
-        }),
+    for (const view of views) {
+      const instr = viewInstruction(view);
+      const snap = await snapshot('view-generation', instr, refMeta.slice(), view);
+      const t0 = Date.now();
+      const cands = (await Promise.all(Array.from({ length: nn }, () => imageProvider.editFromRefs(refPool, instr, { quality: q, size }).catch(() => null)))).filter(
+        (b): b is Uint8Array => b !== null,
       );
-      totalGenMs += Date.now() - batchT0;
-      for (const r of results) {
-        assets.push(r.asset);
-        if (r.issue) issues.push(r.issue);
+      const genMs = Date.now() - t0;
+      totalGenMs += genMs;
+      if (!cands.length) {
+        assets.push({ assetId: '', url: '', role: 'view', view, status: 'failed' });
+        issues.push(`${view}：生成失败`);
+        continue;
       }
-    } else {
-      for (const view of views) {
-        const instr = viewInstruction(view);
-        const snap = await snapshot('view-generation', instr, refMeta.slice(), view);
-        const t0 = Date.now();
-        const cands = (await Promise.all(Array.from({ length: nn }, () => imageProvider.editFromRefs(refPool, instr, { quality: q, size }).catch(() => null)))).filter(
-          (b): b is Uint8Array => b !== null,
-        );
-        const genMs = Date.now() - t0;
-        totalGenMs += genMs;
-        if (!cands.length) {
-          assets.push({ assetId: '', url: '', role: 'view', view, status: 'failed' });
-          issues.push(`${view}：生成失败`);
-          continue;
-        }
-        const judged = await Promise.all(cands.map(async (b) => ({ b, c: await inspectConsistency(hero.bytes, b, view, { projectId: pid, runId, purpose: 'view consistency check' }) })));
-        judged.sort((x, y) => y.c.consistencyScore - x.c.consistencyScore);
-        const best = judged[0];
-        const a = await saveAsset(pid, best.b, { kind: 'booth-image', prompt: `${view} (ref-conditioned checked)`, parentId: hero.assetId, provider: providerName, model: imageModel, quality: q, size, mode, durationMs: genMs, renderInputId: snap.id, sourceAssetIds: refMeta.map((r) => r.id).filter(Boolean), sourceAttachmentIds: attIds });
-        await addInspection(pid, a.id, consistencyToInspectionResult(best.c, view, GATE, MODEL_IDS.inspect));
-        const passed = best.c.sameBooth && best.c.consistencyScore >= GATE;
-        if (passed) {
-          refPool.push(best.b); // 门控：只有通过的进参考池，防漂移传染
-          refMeta.push({ id: a.id, kind: 'asset', role: 'previous_render', url: a.url }); // 通过的视角进 refMeta，后续视角快照可追踪
-        }
-        assets.push({ assetId: a.id, url: a.url, role: 'view', view, status: passed ? 'ok' : 'weak', score: best.c.consistencyScore });
-        if (!passed) issues.push(`${view}：一致性偏弱(${best.c.consistencyScore}<${GATE})，可 revise 或重出`);
-      }
+      const b = cands[0];
+      const a = await saveAsset(pid, b, { kind: 'booth-image', prompt: `${view} (evolution chain)`, parentId: hero.assetId, provider: providerName, model: imageModel, quality: q, size, mode, durationMs: genMs, renderInputId: snap.id, sourceAssetIds: refMeta.map((r) => r.id).filter(Boolean), sourceAttachmentIds: attIds });
+      // 累积参考链：当前视角进 refPool/refMeta，后续视角以它为参考（无门控）。
+      refPool.push(b);
+      refMeta.push({ id: a.id, kind: 'asset', role: 'previous_render', url: a.url });
+      assets.push({ assetId: a.id, url: a.url, role: 'view', view, status: 'ok' });
     }
     const finalIssues = [...ruleMsgs, ...issues];
     const deliverable: Deliverable = { type: plan ? 'plan-conditioned' : 'view-set', assets, recommendedId: hero.assetId, ...(finalIssues.length ? { issues: finalIssues } : {}) };

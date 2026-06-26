@@ -1,10 +1,9 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { DEFAULT_IMAGE_QUALITY, MODEL_IDS, withRenderStyle } from '@/models/gateway';
-import { imageProvider, resolveActiveImageProvider } from '@/models/image-providers';
-import { addInspection, appendRunEvent, loadAssetBytes, projectIdFromContext, readState, recordRunDeliverable, runIdFromContext, saveAsset, saveRenderInputSnapshot } from '@/lib/storage';
+import { DEFAULT_IMAGE_QUALITY, withRenderStyle } from '@/models/gateway';
+import { imageProvider, IMAGE_PROVIDER, IMAGE_MODEL } from '@/models/image-providers';
+import { appendRunEvent, loadAssetBytes, projectIdFromContext, readState, recordRunDeliverable, runIdFromContext, saveAsset, saveRenderInputSnapshot } from '@/lib/storage';
 import { selectUsableAttachmentsFromAnalyses, toRenderInputRefs } from '@/lib/asset-analysis';
-import { inspectImage, toInspectionResult } from '@/agent/inspect';
 import { writeImagePrompt } from '@/agent/prompt-writer';
 import type { Deliverable, RenderInputRef } from '@/lib/types';
 
@@ -23,15 +22,9 @@ export const reviseAsset = tool({
     if (!parentBytes) return { error: `找不到原资产 ${parentAssetId}` };
     const s = await readState(pid);
     const identity = s.spec?.identity ?? '';
-    const criteria = s.spec?.selfCheckCriteria || fix;
-    let providerName: string, imageModel: string;
-    try {
-      const p = resolveActiveImageProvider();
-      providerName = p.name;
-      imageModel = p.model;
-    } catch (e) {
-      return { error: e instanceof Error ? e.message : String(e), code: 'IMAGE_PROVIDER_INVALID' };
-    }
+    // 生图渠道 / 模型已锁定 gpt-image-2 / fal（见 image-providers.ts），仅作元数据记录。
+    const providerName = IMAGE_PROVIDER;
+    const imageModel = IMAGE_MODEL;
     // prompt-writer：中文 fix → 英文"只改一处、其余不变"指令
     const instruction = withRenderStyle(await writeImagePrompt({ intent: fix, identity, kind: 'revise', trace: { projectId: pid, runId, purpose: 'revision prompt' } }));
     // D32 输入快照：edit 前固化（基于哪张图、什么 fix prompt、什么 spec/layout），provider 失败也留证据。
@@ -60,14 +53,11 @@ export const reviseAsset = tool({
     const durationMs = Date.now() - t0;
     if (!bytes) return { error: '局部修复未返回图（编辑模型无输出）' };
     const asset = await saveAsset(pid, bytes, { kind: 'booth-image', prompt: `revise: ${fix}`, parentId: parentAssetId, provider: providerName, model: imageModel, quality: q, size: '1024x1024', mode: 'revise', durationMs, renderInputId: snap.id, sourceAssetIds: [parentAssetId], sourceAttachmentIds: attIds });
-    const insp = await inspectImage(bytes, criteria, { projectId: pid, runId, purpose: 'revision check' });
-    await addInspection(pid, asset.id, toInspectionResult(insp, MODEL_IDS.inspect));
-    // 统一交付协议（D24 契约①）：单张修订图。
+    // 统一交付协议（D24 契约①）：单张修订图。判图/打分已删除（D39），交付不再带 score/自动 issues。
     const deliverable: Deliverable = {
       type: 'revision',
-      assets: [{ assetId: asset.id, url: asset.url, role: 'revision', status: 'recommended', score: insp.score }],
+      assets: [{ assetId: asset.id, url: asset.url, role: 'revision', status: 'recommended' }],
       recommendedId: asset.id,
-      ...(insp.fails.length ? { issues: insp.fails } : {}),
     };
     await recordRunDeliverable(pid, runId, deliverable);
     await appendRunEvent(pid, runId, { type: 'tool', toolName: 'revise_asset', outputSummary: { provider: providerName, model: imageModel, mode: 'revise', quality: q, durationMs } });

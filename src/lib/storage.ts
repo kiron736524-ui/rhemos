@@ -1,7 +1,7 @@
 import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
-import type { Asset, AssetAnalysis, Attachment, AttachmentKind, AttachmentUseRef, BoothLayout, Deliverable, DesignSpec, InspectionResult, ProjectState, ProjectSummary, RenderInputSnapshot, RunBudget, RunEvent, RunRecord, RunStatus } from './types';
+import type { Asset, AssetAnalysis, Attachment, AttachmentKind, AttachmentUseRef, BoothLayout, Deliverable, DesignSpec, ProjectState, ProjectSummary, RenderInputSnapshot, RunBudget, RunEvent, RunRecord, RunStatus } from './types';
 
 // 本地文件系统存储（Phase 4：projectId-keyed 隔离 + per-project 写锁；DB/Blob 留 Phase 5）。
 const ROOT = path.join(/*turbopackIgnore: true*/ process.cwd(), '.data', 'projects');
@@ -89,7 +89,7 @@ export async function saveAsset(
   id: string,
   bytes: Uint8Array,
   meta: Pick<Asset, 'kind'> &
-    Partial<Pick<Asset, 'prompt' | 'parentId' | 'inspections' | 'provider' | 'model' | 'quality' | 'size' | 'mode' | 'durationMs' | 'renderInputId' | 'sourceAttachmentIds' | 'sourceAssetIds'>>,
+    Partial<Pick<Asset, 'prompt' | 'parentId' | 'provider' | 'model' | 'quality' | 'size' | 'mode' | 'durationMs' | 'renderInputId' | 'sourceAttachmentIds' | 'sourceAssetIds'>>,
 ): Promise<Asset> {
   const assetId = `${meta.kind}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const file = path.join(assetsDir(id), `${assetId}.png`);
@@ -98,7 +98,6 @@ export async function saveAsset(
     kind: meta.kind,
     prompt: meta.prompt,
     parentId: meta.parentId,
-    inspections: meta.inspections,
     provider: meta.provider,
     model: meta.model,
     quality: meta.quality,
@@ -129,7 +128,7 @@ export async function saveCandidateAsset(
   id: string,
   bytes: Uint8Array,
   meta: Pick<Asset, 'kind'> &
-    Partial<Pick<Asset, 'prompt' | 'parentId' | 'inspections' | 'provider' | 'model' | 'quality' | 'size' | 'mode' | 'durationMs' | 'renderInputId' | 'sourceAttachmentIds' | 'sourceAssetIds'>>,
+    Partial<Pick<Asset, 'prompt' | 'parentId' | 'provider' | 'model' | 'quality' | 'size' | 'mode' | 'durationMs' | 'renderInputId' | 'sourceAttachmentIds' | 'sourceAssetIds'>>,
 ): Promise<Asset> {
   const assetId = `candidate-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const file = path.join(assetsDir(id), `${assetId}.png`);
@@ -138,7 +137,6 @@ export async function saveCandidateAsset(
     kind: meta.kind,
     prompt: meta.prompt,
     parentId: meta.parentId,
-    inspections: meta.inspections,
     provider: meta.provider,
     model: meta.model,
     quality: meta.quality,
@@ -239,17 +237,6 @@ export async function loadAttachment(id: string, attachmentId: string): Promise<
   const attachment = s.attachments?.find((x) => x.id === attachmentId);
   if (!attachment) throw new Error(`attachment not found: ${attachmentId}`);
   return { attachment, bytes: new Uint8Array(await readFile(path.join(process.cwd(), attachment.path))) };
-}
-
-/** 把判图结果沉淀回资产历史（修 bug：之前判完不写回，read_project_state 永远空）。 */
-export function addInspection(id: string, assetId: string, insp: InspectionResult): Promise<void> {
-  return withLock(id, async () => {
-    const s = await readState(id);
-    const a = s.assets.find((x) => x.id === assetId);
-    if (!a) return;
-    (a.inspections ??= []).push(insp);
-    await writeStateUnlocked(s);
-  });
 }
 
 export async function loadAssetBytes(id: string, assetId: string): Promise<Uint8Array> {

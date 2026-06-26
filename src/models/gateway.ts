@@ -3,45 +3,25 @@ import { gateway } from '@ai-sdk/gateway';
 const envModel = (name: string, fallback: string) => process.env[name]?.trim() || fallback;
 
 /**
- * 多来源模型路由：脑 / 判图 / prompt-writer / 语音清理经 **Vercel AI Gateway**；
+ * 多来源模型路由：脑 / prompt-writer / 成本估算 / 语音清理经 **Vercel AI Gateway**；
  * **gpt-image-2 经 fal.ai**（文生图 + 图编辑，见下方 fal 封装）；**ASR 经阿里云 DashScope**（直连）。
  * 鉴权：AI_GATEWAY_API_KEY / FAL_API_KEY / DASHSCOPE_API_KEY（均在 .env.local，已 gitignore）。
  */
 export const MODEL_IDS = {
   /** 对话 + 工程脑：负责澄清、写 DesignSpec、编排工具。默认 Sonnet 4.6 控成本；可用 RHEMOS_BRAIN_MODEL 覆盖回 Opus。 */
   brain: envModel('RHEMOS_BRAIN_MODEL', 'anthropic/claude-sonnet-4.6'),
-  /** 生图 + 改图 */
+  /** 生图 + 改图：唯一指定模型 gpt-image-2（唯一渠道 fal，见 image-providers.ts）。 */
   image: 'openai/gpt-image-2',
   /** 工具内 prompt-writer：保留 Opus 4.8 写图与物理/世界知识优势；可用 RHEMOS_PROMPT_MODEL 覆盖。 */
   promptWriter: envModel('RHEMOS_PROMPT_MODEL', 'anthropic/claude-opus-4.8'),
-  /** 判图自检：默认 Sonnet 4.6；需要强诊断可用 RHEMOS_INSPECT_MODEL=anthropic/claude-opus-4.8。 */
-  inspect: envModel('RHEMOS_INSPECT_MODEL', 'anthropic/claude-sonnet-4.6'),
   /** 成本解释/估算：走便宜档 DeepSeek。 */
   costEstimator: envModel('RHEMOS_COST_MODEL', 'deepseek/deepseek-v4-flash'),
-  /** 参考图条件化候选（当前本地测试版不作为生图 fallback，生图/改图统一走 gpt-image-2）。 */
-  imageEdit: 'google/gemini-3-pro-image',
   /** 语音转写后的清理整理（去语气词/去重复/轻度理顺）—— efficiency 档，便宜快 */
   cleanup: 'deepseek/deepseek-v4-flash',
 } as const;
 
-/**
- * inspector 选型候选 —— Phase 0 用真实展台图（含已知缺陷）做判图基准测试，
- * 以 Opus 4.8 / 人工为 ground truth 比命中率后选定默认；支持"便宜档先判、不确定/最终交付升级 Opus"分档。
- * 注：gemini / gpt 的确切 Gateway 模型串在 Phase 0 核对后修正。
- */
-export const INSPECT_CANDIDATES = [
-  'anthropic/claude-sonnet-4.6', // 默认起点：成本/质量平衡
-  'anthropic/claude-opus-4.8',   // 升级档 + ground truth 裁判
-  'google/gemini-3-pro',         // Gemini 视觉强（确切串待核对）
-  'openai/gpt-5',                // 与 gpt-image-2 同家（确切串待核对）
-] as const;
-
 /** 语言/推理脑（默认 Sonnet 4.6；见 MODEL_IDS.brain / RHEMOS_BRAIN_MODEL） */
 export const brain = () => gateway.languageModel(MODEL_IDS.brain);
-
-/** 视觉判图器（默认档见 MODEL_IDS.inspect，可传入候选 id 切换/升级） */
-export const inspector = (id: string = MODEL_IDS.inspect) =>
-  gateway.languageModel(id);
 
 // ── fal.ai：gpt-image-2 的来源（文生图 + 图编辑）。实测 gpt-image-2 经 Gateway 接不通图输入（D27），
 // fal 提供 generate + edit 两端点、接受 base64 data URI（免上传 storage）、输出托管 URL。默认 1024 + quality medium（本地测试提速）。
@@ -94,16 +74,3 @@ export const RENDER_STYLE_ANCHOR =
 
 /** 把画风锚追加到任意生图 prompt 末尾（代码层强制兜底）。 */
 export const withRenderStyle = (prompt: string): string => `${prompt}\n\n${RENDER_STYLE_ANCHOR}`;
-
-/**
- * 参考图条件化生图：参考图 + 指令 → "看着这个展台"换角度 / 局部编辑，保持一致。
- * **fal gpt-image-2/edit**（默认 1024 + quality medium；接受 base64 data URI 免上传）。
- * 本地测试期强制所有生图/改图只走 gpt-image-2，不再回退 Gemini。失败返回 null。
- */
-export async function generateImageFromRefs(refs: Uint8Array[], instruction: string, opts?: { quality?: string; size?: string }): Promise<Uint8Array | null> {
-  if (process.env.FAL_API_KEY) {
-    const out = await falEditFromRefs(refs, instruction, opts).catch(() => null);
-    if (out) return out;
-  }
-  return null;
-}

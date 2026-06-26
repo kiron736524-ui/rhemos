@@ -97,7 +97,7 @@ export function estimateRunsCost(runs: RunRecord[]): CostEstimate {
     notes: [
       '历史 run 只能估算已经记录到 run.totalUsage / hidden tool usage 的文本模型成本。',
       'fal.ai 图像费用不在 token usage 中，需按 fal 账单另算。',
-      '本次改造后 prompt_writer / inspect 会写入 hidden usage；旧 run 没有这些隐藏用量，实际历史成本偏低估。',
+      'prompt_writer 会写入 hidden usage；旧 run 没有这些隐藏用量，实际历史成本偏低估。',
     ],
   };
 }

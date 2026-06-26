@@ -133,13 +133,10 @@ function ViewSet({ group, onZoom }: { group: DeliveryGroup; onZoom: OpenPreview 
                 src={v.url}
                 alt={viewLabel(v.view)}
                 onClick={() => onZoom(v.url, urls)}
-                className={`h-24 w-28 cursor-zoom-in rounded-md object-cover ring-1 transition hover:brightness-105 ${v.status === 'weak' ? 'ring-amber-500/50' : 'ring-ink-700'}`}
+                className="h-24 w-28 cursor-zoom-in rounded-md object-cover ring-1 ring-ink-700 transition hover:brightness-105"
                 title="点击放大"
               />
-              <figcaption className="mono-tag text-[10px] text-ink-500">
-                {viewLabel(v.view)}
-                {v.status === 'weak' && <span className="text-amber-500"> · 偏弱</span>}
-              </figcaption>
+              <figcaption className="mono-tag text-[10px] text-ink-500">{viewLabel(v.view)}</figcaption>
             </figure>
           ))}
         </div>

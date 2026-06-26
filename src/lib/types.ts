@@ -62,17 +62,6 @@ export interface AssetAnalysis {
   updatedAt: string;
 }
 
-export interface InspectionResult {
-  pass: boolean;
-  score?: number;
-  fails?: string[];
-  summary?: string;
-  // 分维度判图（可选，新增）：结构/动线/品牌/材质灯光，沉淀回资产供后续统计。
-  dimensions?: Record<'structure' | 'circulation' | 'brand' | 'materialLighting', { pass: boolean; score?: number; issues: string[] }>;
-  model: string;
-  at: string;
-}
-
 export interface Asset {
   id: string;
   kind: AssetKind;
@@ -81,7 +70,6 @@ export interface Asset {
   prompt?: string;
   parentId?: string; // revise 来源资产
   createdAt: string;
-  inspections?: InspectionResult[];
   // 生成元数据（可选，事项4）：provider/model/quality/size/mode/耗时，供排查与对比不同图像供应商。
   provider?: string;
   model?: string;
@@ -295,15 +283,15 @@ export interface ProjectSummary {
 // 所有 render 工具（best_of_n / generate_views / render_from_plan / revise_asset）的**统一出口形状**。
 // 前端 / 对话气泡 / 画廊 / task_complete 都吃这一种 → 以后加新生图工具，前端零改动。
 export type AssetRole = 'hero' | 'view' | 'candidate' | 'revision' | 'plan';
-export type AssetStatus = 'recommended' | 'ok' | 'weak' | 'failed';
+export type AssetStatus = 'recommended' | 'ok' | 'failed';
 
 export interface DeliverableAsset {
   assetId: string;
   url: string;
   role: AssetRole; // 主图 / 视角 / 候选 / 修订 / 平面图
   view?: string; // 视角名（role='view' 时），如 'left side' / 'top-down'
-  status: AssetStatus; // recommended=首选 · ok=通过 · weak=一致性偏弱 · failed=未出图
-  score?: number; // 判图分（质量或一致性）
+  status: AssetStatus; // recommended=首选 · ok=已出图 · failed=未出图（判图/打分已删除，见 D39）
+  score?: number; // 兼容字段：判图删除后不再写入，保留可选以免破坏旧数据
 }
 
 export type DeliverableType = 'single' | 'candidate-set' | 'view-set' | 'plan-conditioned' | 'revision';
