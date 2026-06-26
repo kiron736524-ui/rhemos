@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { DEFAULT_IMAGE_QUALITY, MAX_PARALLEL_IMAGES, withRenderStyle } from '@/models/gateway';
 import { imageProvider, IMAGE_PROVIDER, IMAGE_MODEL } from '@/models/image-providers';
 import { checkBoothLayout, failMessages, hasBlocker, type BoothRuleIssue } from '@/lib/booth-rules';
-import { cadPromptLock } from '@/lib/cad';
+import { buildFootprintLock, cadPromptLock } from '@/lib/cad';
 import { appendRunEvent, loadAssetBytes, markLayoutConfirmed, projectIdFromContext, readState, recordRunDeliverable, runIdFromContext, saveAsset, saveCandidateAsset, saveRenderInputSnapshot } from '@/lib/storage';
 import { selectUsableAttachmentsFromAnalyses, toRenderInputRefs } from '@/lib/asset-analysis';
 import { writeImagePrompt } from '@/agent/prompt-writer';
@@ -42,11 +42,8 @@ export const render = tool({
     const runId = runIdFromContext(ctx);
     const s = await readState(pid);
     const identity = s.spec?.identity ?? '';
-    const footprintRule =
-      s.spec?.footprint?.boundaryRule ??
-      (s.layout?.proposal
-        ? `Booth outer footprint shape is a STRICT RECTANGLE, exactly ${s.layout.proposal.length}m x ${s.layout.proposal.width}m. The raised platform, carpet/floor finish edge, truss perimeter, back wall line, and booth boundary must be one unbroken rectilinear outline with four 90-degree corners. Do NOT create a hexagonal, octagonal, chamfered, diagonal-cut, curved, notched, stepped, bitten-out, protruding, warped, or polygonal outer perimeter. No random add-on floor islands, no corner bulges, and no facade piece may extend outside the rectangle unless the user explicitly requested that irregular shape. Any circular route, ring feature, totem, standee, or decorative feature is an interior design element only, never the booth outline.`
-        : 'Booth outer footprint shape is a STRICT RECTANGLE with four 90-degree corners unless the user explicitly requested an irregular custom perimeter. The platform/carpet edge and truss perimeter must be one unbroken rectangle: no hexagonal, octagonal, chamfered, diagonal-cut, curved, notched, stepped, bitten-out, protruding, warped, add-on, or polygonal outer perimeter. Totems and standees are interior elements only.');
+    // footprint 外轮廓硬规则：单一来源 cad.buildFootprintLock（footprint 一处声明、多处复用，见 D39）。
+    const footprintRule = buildFootprintLock(s.spec, s.layout?.proposal);
     const promptIdentity = identity.includes('FOOTPRINT BOUNDARY HARD RULE') ? identity : `${identity}\n\nFOOTPRINT BOUNDARY HARD RULE: ${footprintRule}`;
     // 本地测试：所有模式默认 medium，避免 high 的长等待；n 仍按 mode 控制候选数量。
     // schema 不设 quality/n 默认，默认在此按 mode 解析——显式传入则尊重，避免 Zod default 与系统提示打架。
@@ -182,7 +179,7 @@ export const render = tool({
 
     const viewInstruction = (view: string) =>
       withRenderStyle(
-        `${promptIdentity}\n\n${layoutLock ? `${layoutLock}\n\n` : ''}Using the attached reference image(s) of THIS exact exhibition booth, render the SAME booth from ${view}. The references are geometry and identity locks, not loose inspiration. Keep every structural part, material, color, brand placement, furniture COUNT, exact outer footprint boundary stated above, raised platform/carpet rectangle, truss perimeter, wall line, and lighting identical to the reference(s); only the camera viewpoint changes. The booth boundary must stay a clean unbroken rectangle with four 90-degree corners unless the identity explicitly says otherwise: no notches, protrusions, chamfers, diagonal bites, warped corners, add-on floor islands, or polygonal platform/truss outline. Freestanding totems / standees are slim rectangular interior signage boards only, never wall extensions and never part of the outer footprint. Do NOT add, remove, move, darken, clutter, or redesign anything.`,
+        `${promptIdentity}\n\n${layoutLock ? `${layoutLock}\n\n` : ''}Using the attached reference image(s) of THIS exact exhibition booth, render the SAME booth from ${view}. The references are geometry and identity locks, not loose inspiration. Keep every structural part, material, color, brand placement, furniture COUNT, the exact outer footprint boundary stated above, raised platform/carpet rectangle, truss perimeter, wall line, and lighting identical to the reference(s); only the camera viewpoint changes. Do NOT add, remove, move, darken, clutter, or redesign anything.`,
       );
 
     for (const view of views) {

@@ -1,14 +1,17 @@
-import type { BoothBrief, BoothLayout, BoothLayoutZone, DesignSpec, LayoutOpening } from './types';
+import type { BoothBrief, BoothLayout, BoothLayoutZone, DesignSpec } from './types';
+import { area, centeredOnEdge, closedEdges, coversCenter, edgeSpanFrac, footprintArea, hugsEdge, overlapArea } from './geometry';
+
+// openingRelation 是纯几何，已统一收口到 geometry.ts；此处 re-export 保持 booth-rules 既有 API（含单测）稳定。
+export { openingRelation } from './geometry';
 
 /**
  * 最小展台规则引擎（纯函数，不依赖模型 / 不调 API）。
  *
- * 定位：在「坐标裁剪」(lib/layout.ts) 与「VLM 判图」(agent/inspect.ts) 之外，补一层
- * **可计算的展台专业校验**——只基于结构化数据（BoothLayout / brief / spec）做几何与常识检查。
- * 把原本只活在 markdown / prompt 里的展台规则前移成可执行、可单测的校验。
+ * 定位：在「坐标裁剪」(lib/layout.ts) 之外，补一层 **可计算的展台专业校验**——只基于结构化数据
+ * （BoothLayout / brief / spec）做几何与常识检查。把原本只活在 markdown / prompt 里的展台规则
+ * 前移成可执行、可单测的校验。几何 helper（贴边/重叠/居中/面积…）统一来自 geometry.ts。
  *
- * 坐标系（与前端 FloorPlan / LayoutEditor 一致）：x 沿长边 ∈[0,length]，y 沿进深 ∈[0,width]；
- * 边：back=y0(顶) · front=y最大(底/主通道侧) · left=x0 · right=x最大。
+ * 坐标系见 geometry.ts（x 沿长边 / y 沿进深；back=y0 · front=y最大 · left=x0 · right=x最大）。
  *
  * 严重度：blocker=必须打回（数据不可用）· fail=明显专业错误 · warning=信息不足或潜在问题。
  * 调用方（present-layout / present-choices / render）只把 issues 透传给前端/大脑或写入
@@ -36,68 +39,9 @@ const BULKY_TYPES = new Set(['meeting', 'storage', 'brand', 'wall']);
 // 关键区（彼此严重重叠即判错）
 const KEY_TYPES = new Set(['led', 'screen', 'brand', 'wall', 'product', 'showcase', 'reception', 'counter', 'meeting', 'storage', 'stage']);
 
-const area = (z: BoothLayoutZone) => Math.max(0, z.w) * Math.max(0, z.h);
-const footprint = (l: BoothLayout) => Math.max(0, l.length) * Math.max(0, l.width);
+// booth-rules 专属的 zone 分类谓词（几何计算见 geometry.ts）。
 const isOverheadOrDetail = (z: BoothLayoutZone) => z.layer === 'detail' || z.type === 'truss';
 const occupiesFloor = (z: BoothLayoutZone) => z.type !== 'aisle' && !isOverheadOrDetail(z);
-
-/** 边的容差：max(0.3m, 该方向尺寸的 8%)。 */
-function edgeTol(l: BoothLayout, axis: 'x' | 'y') {
-  return Math.max(0.3, (axis === 'x' ? l.length : l.width) * 0.08);
-}
-
-/** zone 是否贴某条边。 */
-function hugsEdge(z: BoothLayoutZone, l: BoothLayout, edge: LayoutOpening): boolean {
-  switch (edge) {
-    case 'back':
-      return z.y <= edgeTol(l, 'y');
-    case 'front':
-      return l.width - (z.y + z.h) <= edgeTol(l, 'y');
-    case 'left':
-      return z.x <= edgeTol(l, 'x');
-    case 'right':
-      return l.length - (z.x + z.w) <= edgeTol(l, 'x');
-  }
-}
-
-/** zone 沿某条边的占边比例（0-1+）。 */
-function edgeSpanFrac(z: BoothLayoutZone, l: BoothLayout, edge: LayoutOpening): number {
-  if (edge === 'front' || edge === 'back') return l.length > 0 ? z.w / l.length : 0;
-  return l.width > 0 ? z.h / l.width : 0;
-}
-
-/** zone 是否大致居中于某条边（中点靠近边中点 ±20%）。 */
-function centeredOnEdge(z: BoothLayoutZone, l: BoothLayout, edge: LayoutOpening): boolean {
-  if (edge === 'front' || edge === 'back') {
-    return Math.abs(z.x + z.w / 2 - l.length / 2) <= l.length * 0.2;
-  }
-  return Math.abs(z.y + z.h / 2 - l.width / 2) <= l.width * 0.2;
-}
-
-/** zone 是否覆盖展台几何中心点。 */
-function coversCenter(z: BoothLayoutZone, l: BoothLayout): boolean {
-  const cx = l.length / 2;
-  const cy = l.width / 2;
-  return z.x <= cx && cx <= z.x + z.w && z.y <= cy && cy <= z.y + z.h;
-}
-
-/** 两 zone 重叠面积。 */
-function overlapArea(a: BoothLayoutZone, b: BoothLayoutZone): number {
-  const ox = Math.max(0, Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x));
-  const oy = Math.max(0, Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y));
-  return ox * oy;
-}
-
-const closedEdges = (openings: LayoutOpening[]): LayoutOpening[] =>
-  (['front', 'back', 'left', 'right'] as LayoutOpening[]).filter((e) => !openings.includes(e));
-
-/** 两面开关系：相对(parallel) vs 相邻(corner) vs 未知。 */
-export function openingRelation(openings: LayoutOpening[]): 'parallel' | 'corner' | 'unknown' {
-  if (openings.length !== 2) return 'unknown';
-  const s = new Set(openings);
-  if ((s.has('front') && s.has('back')) || (s.has('left') && s.has('right'))) return 'parallel';
-  return 'corner';
-}
 
 /** 从文本里抽洽谈/会议人数（"4人" / "6 people" / "8 pax"）。 */
 function headcountFrom(...texts: (string | undefined)[]): number | undefined {
@@ -120,7 +64,7 @@ export function checkBoothLayout(layout: BoothLayout, ctx: BoothRuleContext = {}
   const push = (i: BoothRuleIssue) => issues.push(i);
   const zones = Array.isArray(layout?.zones) ? layout.zones : [];
   const openings = Array.isArray(layout?.openings) ? layout.openings : [];
-  const fp = footprint(layout);
+  const fp = footprintArea(layout);
 
   // ── 规则 1：长宽合理 + zones 非空 ──
   if (!(layout.length > 0) || !(layout.width > 0)) {

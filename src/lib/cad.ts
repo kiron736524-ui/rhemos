@@ -1,6 +1,5 @@
-import type { BoothLayout, BoothLayoutZone, LayoutOpening } from './types';
-
-const EDGES: LayoutOpening[] = ['back', 'front', 'left', 'right'];
+import type { BoothLayout, DesignSpec, LayoutOpening } from './types';
+import { EDGES, edgeLength, touchesEdge } from './geometry';
 
 export type CadUnit = 'm';
 
@@ -42,7 +41,6 @@ export interface CadDocument {
 }
 
 const fmt = (n: number) => Number(n.toFixed(2));
-const edgeLength = (layout: BoothLayout, edge: LayoutOpening) => (edge === 'back' || edge === 'front' ? layout.length : layout.width);
 const edgeLabel = (edge: LayoutOpening) =>
   ({
     back: 'BACK/top long side',
@@ -50,16 +48,6 @@ const edgeLabel = (edge: LayoutOpening) =>
     left: 'LEFT short side',
     right: 'RIGHT short side',
   })[edge];
-
-function touches(layout: BoothLayout, z: BoothLayoutZone): LayoutOpening[] {
-  const eps = 0.05;
-  const out: LayoutOpening[] = [];
-  if (z.y <= eps) out.push('back');
-  if (z.y + z.h >= layout.width - eps) out.push('front');
-  if (z.x <= eps) out.push('left');
-  if (z.x + z.w >= layout.length - eps) out.push('right');
-  return out;
-}
 
 export function layoutToCadDocument(layout: BoothLayout): CadDocument {
   const open = new Set(layout.openings ?? []);
@@ -91,7 +79,7 @@ export function layoutToCadDocument(layout: BoothLayout): CadDocument {
       ...(z.material ? { material: z.material } : {}),
       ...(z.description ? { description: z.description } : {}),
       ...(z.parentId ? { parentId: z.parentId } : {}),
-      touches: touches(layout, z),
+      touches: touchesEdge(z, layout),
     })),
     constraints: [
       'The footprint is the authoritative booth boundary and must remain a strict rectangle unless the document shape changes.',
@@ -110,4 +98,17 @@ export function cadPromptLock(layout?: BoothLayout): string {
 ${JSON.stringify(cad, null, 2)}
 
 Use this CAD document as the source of truth. The PNG floor plan, if attached, is only a visual rendering of this same CAD data. Do not infer a different layout from prose. Do not swap left/right/front/back. Do not merge unrelated CAD objects. Do not move objects to another edge. Do not convert the strict rectangular footprint into a polygon, notch, chamfer, protrusion, curved edge, or add-on island.`;
+}
+
+/**
+ * footprint 外轮廓硬规则文案的**单一来源**（footprint 在 DesignSpec.footprint 一处声明，此处资产化、多处复用）。
+ * 优先用 spec.footprint.boundaryRule（用户/方案显式写的轮廓规则）；否则按 layout 实测尺寸生成带具体米数的矩形硬规则；
+ * 都没有时给通用矩形硬规则。render 注入 identity、其它生图调用点也可复用，避免同一约束在代码里抄多份。
+ */
+export function buildFootprintLock(spec?: DesignSpec, layout?: BoothLayout): string {
+  if (spec?.footprint?.boundaryRule) return spec.footprint.boundaryRule;
+  if (layout) {
+    return `Booth outer footprint shape is a STRICT RECTANGLE, exactly ${layout.length}m x ${layout.width}m. The raised platform, carpet/floor finish edge, truss perimeter, back wall line, and booth boundary must be one unbroken rectilinear outline with four 90-degree corners. Do NOT create a hexagonal, octagonal, chamfered, diagonal-cut, curved, notched, stepped, bitten-out, protruding, warped, or polygonal outer perimeter. No random add-on floor islands, no corner bulges, and no facade piece may extend outside the rectangle unless the user explicitly requested that irregular shape. Any circular route, ring feature, totem, standee, or decorative feature is an interior design element only, never the booth outline.`;
+  }
+  return 'Booth outer footprint shape is a STRICT RECTANGLE with four 90-degree corners unless the user explicitly requested an irregular custom perimeter. The platform/carpet edge and truss perimeter must be one unbroken rectangle: no hexagonal, octagonal, chamfered, diagonal-cut, curved, notched, stepped, bitten-out, protruding, warped, add-on, or polygonal outer perimeter. Totems and standees are interior elements only.';
 }

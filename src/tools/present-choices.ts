@@ -2,17 +2,13 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import { boothLayoutSchema, normalizeBoothLayout } from '@/lib/layout';
 import { checkBoothLayout } from '@/lib/booth-rules';
+import { EDGES, closedEdges, edgeLength } from '@/lib/geometry';
 import type { BoothLayout, LayoutOpening } from '@/lib/types';
 
 // 结构化卡片提问（替代纯文字问答）。大脑调用它，前端渲染成可点击卡片，用户点选后零打字回传。
 // 每个布局选项可带结构化 BoothLayout，前端自动渲染俯视草图。非阻塞：execute 纯透传，前端据此渲染。
+// 几何 helper（EDGES / closedEdges / edgeLength）统一来自 geometry.ts。
 
-const EDGES: LayoutOpening[] = ['front', 'back', 'left', 'right'];
-const closedEdges = (layout: BoothLayout): LayoutOpening[] => {
-  const open = new Set(layout.openings ?? []);
-  return EDGES.filter((e) => !open.has(e));
-};
-const edgeLength = (layout: BoothLayout, edge: LayoutOpening): number => (edge === 'front' || edge === 'back' ? layout.length : layout.width);
 const edgeNameZh = (edge: LayoutOpening): string => ({ front: 'front/前边', back: 'back/后边', left: 'left/左边', right: 'right/右边' })[edge];
 
 const escapeRegex = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -42,7 +38,7 @@ export function layoutLabelIssues(label: string, _detail: string | undefined, la
   // detail 往往会同时描述开放边与其它边长；扫描整段会把“开放短边”等背景误判成“封闭短边”。
   const text = `${label} ${layout.facing ?? ''}`;
   if (!/(封闭|关闭|背墙|主墙|主视觉墙|closed|back wall|main wall)/i.test(text)) return [];
-  const closed = closedEdges(layout);
+  const closed = closedEdges(layout.openings ?? []);
   if (closed.length !== 1) return [];
   const closedLen = edgeLength(layout, closed[0]);
   const min = Math.min(layout.length, layout.width);
