@@ -147,6 +147,8 @@ export async function POST(req: Request) {
   const result = streamText({
     ...cfg,
     messages: modelMessages,
+    // 客户端断流 → 取消模型与工具（工具 execute 的 abortSignal 透传到 fal，取消在飞生图）。
+    abortSignal: req.signal,
     // 把 projectId 注入工具上下文，实现项目隔离（工具用 projectIdFromContext 读取）
     experimental_context: { projectId: pid, runId: run.id },
     experimental_include: { requestBody: false },

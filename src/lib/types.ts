@@ -280,7 +280,7 @@ export interface ProjectSummary {
 }
 
 // ── 统一交付协议 Deliverable（D24 契约①）──
-// 所有 render 工具（best_of_n / generate_views / render_from_plan / revise_asset）的**统一出口形状**。
+// 所有生图工具（render / revise_asset）的**统一出口形状**。
 // 前端 / 对话气泡 / 画廊 / task_complete 都吃这一种 → 以后加新生图工具，前端零改动。
 export type AssetRole = 'hero' | 'view' | 'candidate' | 'revision' | 'plan';
 export type AssetStatus = 'recommended' | 'ok' | 'failed';

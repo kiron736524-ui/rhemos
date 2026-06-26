@@ -279,6 +279,3 @@ export const hasBlocker = (issues: BoothRuleIssue[]): boolean => issues.some((i)
 /** 取非 warning（blocker+fail）的简短消息列表，便于写入 deliverable.issues。 */
 export const failMessages = (issues: BoothRuleIssue[]): string[] =>
   issues.filter((i) => i.severity !== 'warning').map((i) => i.message);
-
-/** 全部 issue 的简短消息（含 warning），用于 prompt-writer criteria / run 记录。 */
-export const allMessages = (issues: BoothRuleIssue[]): string[] => issues.map((i) => `[${i.severity}] ${i.message}`);

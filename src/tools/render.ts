@@ -34,12 +34,12 @@ export const render = tool({
     n: z.number().int().min(1).max(MAX_PARALLEL_IMAGES).optional().describe('每张图 best-of-N 候选数；留空=按 mode 取默认（concept→1，final→2）。实测单次方差大，final 用 2 给用户挑'),
   }),
   execute: async (args, opts) => {
-    const rawCtx = (opts as { experimental_context?: unknown }).experimental_context;
-    const pid = projectIdFromContext(rawCtx);
-    const runId = runIdFromContext(rawCtx);
+    const o = opts as { experimental_context?: unknown; abortSignal?: AbortSignal };
+    const pid = projectIdFromContext(o.experimental_context);
+    const runId = runIdFromContext(o.experimental_context);
 
-    // ① 门控 + 准备：失败直接早退（error code 不变）。
-    const ctx = await resolveRenderContext(args as RenderArgs, { pid, runId });
+    // ① 门控 + 准备：失败直接早退（error code 不变）。signal 让客户端断流能取消在飞 fal 调用。
+    const ctx = await resolveRenderContext(args as RenderArgs, { pid, runId, signal: o.abortSignal });
     if (isRenderError(ctx)) return ctx;
 
     // ② 首稿候选（文生图 / 平面图条件化 / 复用基准图）。

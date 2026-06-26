@@ -24,7 +24,7 @@ export interface CandidatesResult {
  * 返回候选数组（首张即推荐项）+ 本批生图墙钟，或 RenderError（execute 早退）。
  */
 export async function generateCandidates(ctx: RenderContext): Promise<CandidatesResult | RenderError> {
-  const { pid, plan, planId, baseAsset, views, n, quality, size, mode, promptIdentity, layoutLock, frontPrompt, providerName, imageModel, attIds, snapshot, effectivePlanAssetId } = ctx;
+  const { pid, plan, planId, baseAsset, views, n, quality, size, mode, promptIdentity, layoutLock, frontPrompt, providerName, imageModel, attIds, snapshot, effectivePlanAssetId, signal } = ctx;
   const lockPrefix = layoutLock ? `${layoutLock}\n\n` : '';
 
   // (a) 深化场景：直接复用用户选定基准图
@@ -42,7 +42,7 @@ export async function generateCandidates(ctx: RenderContext): Promise<Candidates
     const planRef: RenderInputRef = { id: planId, kind: 'plan', role: 'floor_plan', url: `/api/assets/${planId}?project=${pid}` };
     const snap = await snapshot('plan-conditioned', instr, [planRef]);
     const t0 = Date.now();
-    const raw = await batchGenerate(n, () => imageProvider.editFromRefs([plan], instr, { quality, size }));
+    const raw = await batchGenerate(n, () => imageProvider.editFromRefs([plan], instr, { quality, size, signal }));
     const genMs = Date.now() - t0;
     if (!raw.length) return { error: '主图生成失败（按平面图）' };
     const heroCands: HeroCandidate[] = [];
@@ -57,7 +57,7 @@ export async function generateCandidates(ctx: RenderContext): Promise<Candidates
   const full = withRenderStyle(`${promptIdentity}\n\n${lockPrefix}${frontPrompt}`);
   const snap = await snapshot('text-to-image', full, []);
   const t0 = Date.now();
-  const raw = await batchGenerate(n, () => imageProvider.textToImage(full, { quality, size }));
+  const raw = await batchGenerate(n, () => imageProvider.textToImage(full, { quality, size, signal }));
   const genMs = Date.now() - t0;
   if (!raw.length) return { error: '主图生成失败（无返回）' };
   const heroCands: HeroCandidate[] = [];

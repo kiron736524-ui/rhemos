@@ -16,7 +16,7 @@ export interface ViewsChainResult {
  * 判图门控已删除——每张生成的视角都直接进参考池；漂移可能沿链传染，属已知取舍（用户确认接受，后续再优化）。
  */
 export async function generateViewsChain(ctx: RenderContext, hero: HeroCandidate): Promise<ViewsChainResult> {
-  const { pid, plan, planId, views, n, quality, size, mode, promptIdentity, layoutLock, providerName, imageModel, attIds, snapshot } = ctx;
+  const { pid, plan, planId, views, n, quality, size, mode, promptIdentity, layoutLock, providerName, imageModel, attIds, snapshot, signal } = ctx;
   const lockPrefix = layoutLock ? `${layoutLock}\n\n` : '';
   const assets: DeliverableAsset[] = [];
   const issues: string[] = [];
@@ -34,7 +34,7 @@ export async function generateViewsChain(ctx: RenderContext, hero: HeroCandidate
     const instr = viewInstruction(view);
     const snap = await snapshot('view-generation', instr, refMeta.slice(), view);
     const t0 = Date.now();
-    const cands = await batchGenerate(n, () => imageProvider.editFromRefs(refPool, instr, { quality, size }));
+    const cands = await batchGenerate(n, () => imageProvider.editFromRefs(refPool, instr, { quality, size, signal }));
     const batchMs = Date.now() - t0;
     genMs += batchMs;
     if (!cands.length) {

@@ -7,7 +7,7 @@ export const runtime = 'nodejs';
 const valid = (id: string) => /^[\w-]+$/.test(id);
 const MAX_REF_BYTES = 8 * 1024 * 1024; // 8MB 参考图上限（防超大 base64 撑爆）
 
-// 把前端截图（布局编辑器定稿的俯视平面图）存为 reference asset，供 render_from_plan 作硬参考。
+// 把前端截图（布局编辑器定稿的俯视平面图）存为 reference asset，供 render 按平面图作硬参考。
 export async function POST(req: Request, ctx: { params: Promise<{ projectId: string }> }) {
   const { projectId } = await ctx.params;
   if (!valid(projectId)) return NextResponse.json({ error: 'bad project id' }, { status: 400 });

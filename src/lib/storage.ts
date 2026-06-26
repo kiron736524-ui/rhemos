@@ -1,4 +1,4 @@
-import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import type { Asset, AssetAnalysis, Attachment, AttachmentKind, AttachmentUseRef, BoothLayout, Deliverable, DesignSpec, ProjectState, ProjectSummary, RenderInputSnapshot, RunBudget, RunEvent, RunRecord, RunStatus } from './types';
@@ -46,17 +46,45 @@ function withLock<T>(id: string, fn: () => Promise<T>): Promise<T> {
   return run;
 }
 
+/** 原子写：先写临时文件再 rename（同目录 rename 在常见文件系统是原子操作），避免崩溃/并发产生半截 JSON。 */
+async function writeFileAtomic(file: string, data: string | Uint8Array): Promise<void> {
+  const tmp = `${file}.tmp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  await writeFile(tmp, data);
+  await rename(tmp, file);
+}
+
+const emptyState = (id: string): ProjectState => ({ id, brief: {}, assets: [], updatedAt: new Date().toISOString() });
+
 export async function readState(id: string = DEFAULT_PROJECT): Promise<ProjectState> {
   const p = statePath(id);
-  if (existsSync(p)) return JSON.parse(await readFile(p, 'utf8')) as ProjectState;
-  return { id, brief: {}, assets: [], updatedAt: new Date().toISOString() };
+  if (!existsSync(p)) return emptyState(id);
+  try {
+    return JSON.parse(await readFile(p, 'utf8')) as ProjectState;
+  } catch (e) {
+    // 损坏的 state.json 不再让整个项目 500：备份为 .corrupt 保留证据，回退空态（不静默覆盖丢数据）。
+    console.error(`[storage] state.json 解析失败（${id}）：${e instanceof Error ? e.message : e}；备份为 .corrupt 并回退空态`);
+    try {
+      await rename(p, `${p}.corrupt-${Date.now()}`);
+    } catch {
+      /* 备份失败也不阻断 */
+    }
+    return emptyState(id);
+  }
 }
 
 async function writeStateUnlocked(state: ProjectState): Promise<void> {
   if (tombstoned.has(state.id)) return; // 项目已删除，绝不重建其状态文件
   await mkdir(projDir(state.id), { recursive: true });
   state.updatedAt = new Date().toISOString();
-  await writeFile(statePath(state.id), JSON.stringify(state, null, 2), 'utf8');
+  await writeFileAtomic(statePath(state.id), JSON.stringify(state, null, 2));
+}
+
+/** 生图输入快照用的 spec/layout 轻量摘要（render / revise 共用，避免两处各抄一份）。 */
+export function buildSnapshotSummaries(s: ProjectState): Pick<RenderInputSnapshot, 'specSummary' | 'layoutSummary'> {
+  return {
+    specSummary: { hasSpec: !!s.spec, identity: s.spec?.identity, invariants: s.spec?.invariants, selfCheckCriteria: s.spec?.selfCheckCriteria, updatedAt: s.spec?.updatedAt },
+    layoutSummary: s.layout ? { status: s.layout.status, planAssetId: s.layout.planAssetId, proposal: s.layout.proposal } : undefined,
+  };
 }
 
 export function writeState(state: ProjectState): Promise<void> {
@@ -85,13 +113,20 @@ export function mergeBrief(id: string, patch: Record<string, unknown>): Promise<
   });
 }
 
-export async function saveAsset(
-  id: string,
-  bytes: Uint8Array,
-  meta: Pick<Asset, 'kind'> &
-    Partial<Pick<Asset, 'prompt' | 'parentId' | 'provider' | 'model' | 'quality' | 'size' | 'mode' | 'durationMs' | 'renderInputId' | 'sourceAttachmentIds' | 'sourceAssetIds'>>,
-): Promise<Asset> {
-  const assetId = `${meta.kind}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+const candidatePath = (id: string, assetId: string) => path.join(candidatesDir(id), `${assetId}.json`);
+
+type AssetMeta = Pick<Asset, 'kind'> &
+  Partial<Pick<Asset, 'prompt' | 'parentId' | 'provider' | 'model' | 'quality' | 'size' | 'mode' | 'durationMs' | 'renderInputId' | 'sourceAttachmentIds' | 'sourceAssetIds'>>;
+
+/**
+ * 存一张生成图（saveAsset / saveCandidateAsset 的统一实现，去除两者 ~90% 重复）。
+ * candidate=false（默认）→ 正式资产，push 进 state.assets；
+ * candidate=true → 只落 PNG + candidates/<id>.json 旁证，不进资产库（用户 promote 后才入库）。
+ * 文件名唯一、原子写；tombstone 项目直接丢弃返回（不重建已删目录）。
+ */
+export async function saveAssetFile(id: string, bytes: Uint8Array, meta: AssetMeta, opts: { candidate?: boolean } = {}): Promise<Asset> {
+  const candidate = opts.candidate ?? false;
+  const assetId = `${candidate ? 'candidate' : meta.kind}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const file = path.join(assetsDir(id), `${assetId}.png`);
   const asset: Asset = {
     id: assetId,
@@ -113,50 +148,24 @@ export async function saveAsset(
   };
   if (tombstoned.has(id)) return asset; // 项目已删除：丢弃飞行中的生图结果，绝不重建已删目录
   await mkdir(assetsDir(id), { recursive: true });
-  await writeFile(file, bytes); // 唯一文件名，无需锁
-  await withLock(id, async () => {
-    const s = await readState(id);
-    s.assets.push(asset);
-    await writeStateUnlocked(s);
-  });
+  await writeFileAtomic(file, bytes); // 唯一文件名，无需锁
+  if (candidate) {
+    await mkdir(candidatesDir(id), { recursive: true });
+    await writeFileAtomic(candidatePath(id, assetId), JSON.stringify(asset, null, 2));
+  } else {
+    await withLock(id, async () => {
+      const s = await readState(id);
+      s.assets.push(asset);
+      await writeStateUnlocked(s);
+    });
+  }
   return asset;
 }
 
-const candidatePath = (id: string, assetId: string) => path.join(candidatesDir(id), `${assetId}.json`);
-
-export async function saveCandidateAsset(
-  id: string,
-  bytes: Uint8Array,
-  meta: Pick<Asset, 'kind'> &
-    Partial<Pick<Asset, 'prompt' | 'parentId' | 'provider' | 'model' | 'quality' | 'size' | 'mode' | 'durationMs' | 'renderInputId' | 'sourceAttachmentIds' | 'sourceAssetIds'>>,
-): Promise<Asset> {
-  const assetId = `candidate-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  const file = path.join(assetsDir(id), `${assetId}.png`);
-  const asset: Asset = {
-    id: assetId,
-    kind: meta.kind,
-    prompt: meta.prompt,
-    parentId: meta.parentId,
-    provider: meta.provider,
-    model: meta.model,
-    quality: meta.quality,
-    size: meta.size,
-    mode: meta.mode,
-    durationMs: meta.durationMs,
-    renderInputId: meta.renderInputId,
-    sourceAttachmentIds: meta.sourceAttachmentIds,
-    sourceAssetIds: meta.sourceAssetIds,
-    path: path.relative(process.cwd(), file),
-    url: `/api/assets/${assetId}?project=${id}`,
-    createdAt: new Date().toISOString(),
-  };
-  if (tombstoned.has(id)) return asset;
-  await mkdir(assetsDir(id), { recursive: true });
-  await mkdir(candidatesDir(id), { recursive: true });
-  await writeFile(file, bytes);
-  await writeFile(candidatePath(id, assetId), JSON.stringify(asset, null, 2), 'utf8');
-  return asset;
-}
+/** 正式资产（进 state.assets）。 */
+export const saveAsset = (id: string, bytes: Uint8Array, meta: AssetMeta): Promise<Asset> => saveAssetFile(id, bytes, meta);
+/** 首稿候选（只落候选旁证，不进资产库；promote 后才入库）。 */
+export const saveCandidateAsset = (id: string, bytes: Uint8Array, meta: AssetMeta): Promise<Asset> => saveAssetFile(id, bytes, meta, { candidate: true });
 
 export function promoteCandidateAsset(id: string, assetId: string): Promise<Asset> {
   return withLock(id, async () => {
@@ -222,7 +231,7 @@ export async function saveAttachment(
   };
   if (tombstoned.has(id)) return attachment;
   await mkdir(attachmentsDir(id), { recursive: true });
-  await writeFile(file, bytes);
+  await writeFileAtomic(file, bytes);
   await withLock(id, async () => {
     const s = await readState(id);
     (s.attachments ??= []).push(attachment);
@@ -330,7 +339,7 @@ async function writeRunUnlocked(run: RunRecord): Promise<void> {
   if (tombstoned.has(run.projectId)) return;
   await mkdir(runsDir(run.projectId), { recursive: true });
   run.updatedAt = new Date().toISOString();
-  await writeFile(runPath(run.projectId, run.id), JSON.stringify(run, null, 2), 'utf8');
+  await writeFileAtomic(runPath(run.projectId, run.id), JSON.stringify(run, null, 2));
 }
 
 function runSummary(run: RunRecord) {
@@ -443,7 +452,7 @@ export function saveRenderInputSnapshot(
   if (tombstoned.has(projectId)) return Promise.resolve(snap); // 项目已删除：不重建目录，仍返回快照对象
   return withLock(projectId, async () => {
     await mkdir(renderInputsDir(projectId), { recursive: true });
-    await writeFile(renderInputPath(projectId, snap.id), JSON.stringify(snap, null, 2), 'utf8');
+    await writeFileAtomic(renderInputPath(projectId, snap.id), JSON.stringify(snap, null, 2));
     return snap;
   });
 }
@@ -522,7 +531,7 @@ export function saveAssetAnalysis(
   if (tombstoned.has(projectId)) return Promise.resolve(full);
   return withLock(projectId, async () => {
     await mkdir(analysesDir(projectId), { recursive: true });
-    await writeFile(analysisPath(projectId, full.id), JSON.stringify(full, null, 2), 'utf8');
+    await writeFileAtomic(analysisPath(projectId, full.id), JSON.stringify(full, null, 2));
     return full;
   });
 }
@@ -576,6 +585,6 @@ export function saveConversation(id: string, messages: unknown[]): Promise<void>
   return withLock(id, async () => {
     if (tombstoned.has(id)) return; // 项目已删除，不重建其对话文件
     await mkdir(projDir(id), { recursive: true });
-    await writeFile(conversationPath(id), JSON.stringify(messages), 'utf8');
+    await writeFileAtomic(conversationPath(id), JSON.stringify(messages));
   });
 }

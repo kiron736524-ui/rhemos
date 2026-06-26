@@ -35,29 +35,92 @@ const falKey = () => process.env.FAL_API_KEY ?? process.env.FAL_KEY;
 const falHeaders = () => ({ Authorization: `Key ${falKey()}`, 'Content-Type': 'application/json' });
 
 /** 调 fal 同步端点 → 取首图 URL → 下载字节。失败返回 null。 */
-async function falImage(endpoint: string, body: Record<string, unknown>): Promise<Uint8Array | null> {
-  const res = await fetch(`${FAL_BASE}/${endpoint}`, { method: 'POST', headers: falHeaders(), body: JSON.stringify(body) });
-  if (!res.ok) {
-    const detail = await res.text().catch(() => '');
-    console.warn(`[fal] ${endpoint} failed ${res.status}: ${detail.slice(0, 500)}`);
-    return null;
+// fal 返回的图片 URL 下载前做 SSRF 白名单校验：必须 https 且 host ∈ fal 域，杜绝被构造 URL 牵去内网/任意地址。
+const falHostOk = (h: string) =>
+  h === 'fal.media' || h.endsWith('.fal.media') || h === 'fal.run' || h.endsWith('.fal.run') || h === 'fal.ai' || h.endsWith('.fal.ai');
+function isAllowedFalUrl(raw: string): boolean {
+  try {
+    const u = new URL(raw);
+    return u.protocol === 'https:' && falHostOk(u.hostname.toLowerCase());
+  } catch {
+    return false;
   }
-  const data = (await res.json()) as { images?: { url?: string }[] };
-  const url = data.images?.[0]?.url;
-  if (!url) return null;
-  const ab = await (await fetch(url)).arrayBuffer();
-  return new Uint8Array(ab);
+}
+
+const FAL_TIMEOUT_MS = Number(process.env.RHEMOS_FAL_TIMEOUT_MS) || 300_000; // gpt-image-2 high ~200s，留足余量
+const FAL_RETRIES = 2; // 5xx / 网络抖动的额外重试次数（指数退避）；超时与客户端断流不重试
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * 调 fal 同步端点 → 取首图 URL（SSRF 校验）→ 下载字节。失败返回 null。
+ * 加固（D39）：单次超时（AbortController）；5xx/网络错指数退避重试，4xx/超时/客户端断流不重试；
+ * 外部 signal（客户端断流，route 经 streamText abortSignal 透传到工具）可真正取消在飞的 fal 调用。
+ */
+async function falImage(endpoint: string, body: Record<string, unknown>, signal?: AbortSignal): Promise<Uint8Array | null> {
+  for (let attempt = 0; attempt <= FAL_RETRIES; attempt++) {
+    if (signal?.aborted) return null;
+    const ctrl = new AbortController();
+    let timedOut = false;
+    const onAbort = () => ctrl.abort();
+    signal?.addEventListener('abort', onAbort, { once: true });
+    const timer = setTimeout(() => {
+      timedOut = true;
+      ctrl.abort();
+    }, FAL_TIMEOUT_MS);
+    try {
+      const res = await fetch(`${FAL_BASE}/${endpoint}`, { method: 'POST', headers: falHeaders(), body: JSON.stringify(body), signal: ctrl.signal });
+      if (!res.ok) {
+        const detail = await res.text().catch(() => '');
+        console.warn(`[fal] ${endpoint} failed ${res.status}: ${detail.slice(0, 500)}`);
+        if (res.status < 500) return null; // 4xx（鉴权/参数）重试无意义
+        if (attempt < FAL_RETRIES) {
+          await sleep(800 * 2 ** attempt);
+          continue;
+        }
+        return null;
+      }
+      const data = (await res.json()) as { images?: { url?: string }[] };
+      const url = data.images?.[0]?.url;
+      if (!url) return null;
+      if (!isAllowedFalUrl(url)) {
+        console.warn(`[fal] 拒绝下载非 fal 域图片 URL（SSRF 防护）：${url.slice(0, 120)}`);
+        return null;
+      }
+      const imgRes = await fetch(url, { signal: ctrl.signal });
+      if (!imgRes.ok) return null;
+      return new Uint8Array(await imgRes.arrayBuffer());
+    } catch (e) {
+      if (signal?.aborted) {
+        console.warn(`[fal] ${endpoint} 已取消（客户端断流）`);
+        return null;
+      }
+      if (timedOut) {
+        console.warn(`[fal] ${endpoint} 超时（${FAL_TIMEOUT_MS}ms）`);
+        return null;
+      }
+      console.warn(`[fal] ${endpoint} 网络异常（尝试 ${attempt + 1}/${FAL_RETRIES + 1}）：${e instanceof Error ? e.message : e}`);
+      if (attempt < FAL_RETRIES) {
+        await sleep(800 * 2 ** attempt);
+        continue;
+      }
+      return null;
+    } finally {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+    }
+  }
+  return null;
 }
 
 /** fal gpt-image-2 文生图（默认 1024 square_hd + quality medium）。 */
-export async function falTextToImage(prompt: string, opts?: { quality?: string; size?: string }): Promise<Uint8Array | null> {
-  return falImage(FAL_TEXT_ENDPOINT, { prompt, image_size: falSize(opts?.size), quality: opts?.quality ?? DEFAULT_IMAGE_QUALITY });
+export async function falTextToImage(prompt: string, opts?: { quality?: string; size?: string; signal?: AbortSignal }): Promise<Uint8Array | null> {
+  return falImage(FAL_TEXT_ENDPOINT, { prompt, image_size: falSize(opts?.size), quality: opts?.quality ?? DEFAULT_IMAGE_QUALITY }, opts?.signal);
 }
 
 /** fal gpt-image-2/edit 参考条件化（多图参考走 base64 data URI + 默认 1024 + medium）。 */
-export async function falEditFromRefs(refs: Uint8Array[], prompt: string, opts?: { quality?: string; size?: string }): Promise<Uint8Array | null> {
+export async function falEditFromRefs(refs: Uint8Array[], prompt: string, opts?: { quality?: string; size?: string; signal?: AbortSignal }): Promise<Uint8Array | null> {
   const image_urls = refs.map((b) => `data:image/png;base64,${Buffer.from(b).toString('base64')}`);
-  return falImage(FAL_EDIT_ENDPOINT, { prompt, image_urls, image_size: falSize(opts?.size), quality: opts?.quality ?? DEFAULT_IMAGE_QUALITY });
+  return falImage(FAL_EDIT_ENDPOINT, { prompt, image_urls, image_size: falSize(opts?.size), quality: opts?.quality ?? DEFAULT_IMAGE_QUALITY }, opts?.signal);
 }
 
 /** best-of-N 并发上限（成本控制；Phase 2 best-of-N 用） */

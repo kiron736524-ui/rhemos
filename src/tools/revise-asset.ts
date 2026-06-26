@@ -2,22 +2,23 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import { DEFAULT_IMAGE_QUALITY, withRenderStyle } from '@/models/gateway';
 import { imageProvider, IMAGE_PROVIDER, IMAGE_MODEL } from '@/models/image-providers';
-import { appendRunEvent, loadAssetBytes, projectIdFromContext, readState, recordRunDeliverable, runIdFromContext, saveAsset, saveRenderInputSnapshot } from '@/lib/storage';
+import { appendRunEvent, buildSnapshotSummaries, loadAssetBytes, projectIdFromContext, readState, recordRunDeliverable, runIdFromContext, saveAsset, saveRenderInputSnapshot } from '@/lib/storage';
 import { selectUsableAttachmentsFromAnalyses, toRenderInputRefs } from '@/lib/asset-analysis';
 import { writeImagePrompt } from '@/agent/prompt-writer';
 import type { Deliverable, RenderInputRef } from '@/lib/types';
 
 export const reviseAsset = tool({
   description:
-    '参考图局部编辑（保持其余 100% 不变，只改一处客观硬伤）：加载原图作参考，只改你指定的局部、其余与原图一致。比"从头重生"一致性高得多——单视角全幅图上精修单点问题用这个。你只给**中文**要改什么，内部 prompt 专家翻成精确英文指令；identity/判图要点自读 spec。返回统一交付物。',
+    '参考图局部编辑（保持其余 100% 不变，只改一处客观硬伤）：加载原图作参考，只改你指定的局部、其余与原图一致。比"从头重生"一致性高得多——单视角全幅图上精修单点问题用这个。你只给**中文**要改什么，内部 prompt 专家翻成精确英文指令；identity 自读 spec。返回统一交付物。',
   inputSchema: z.object({
     parentAssetId: z.string().describe('被修的原资产 id'),
     fix: z.string().describe('要修正的局部（**中文**，只说"改什么"，如"洽谈区只留一张圆桌配 4 把白椅，删掉多出来的椅子和第二张桌子"）'),
   }),
   execute: async ({ parentAssetId, fix }, opts) => {
-    const ctx = (opts as { experimental_context?: unknown }).experimental_context;
-    const pid = projectIdFromContext(ctx);
-    const runId = runIdFromContext(ctx);
+    const o = opts as { experimental_context?: unknown; abortSignal?: AbortSignal };
+    const pid = projectIdFromContext(o.experimental_context);
+    const runId = runIdFromContext(o.experimental_context);
+    const signal = o.abortSignal; // 客户端断流可取消在飞 fal 调用
     const parentBytes = await loadAssetBytes(pid, parentAssetId).catch(() => null);
     if (!parentBytes) return { error: `找不到原资产 ${parentAssetId}` };
     const s = await readState(pid);
@@ -44,12 +45,11 @@ export const reviseAsset = tool({
       prompt: instruction,
       intent: fix,
       operation: 'revision',
-      specSummary: { hasSpec: !!s.spec, identity: s.spec?.identity, invariants: s.spec?.invariants, selfCheckCriteria: s.spec?.selfCheckCriteria, updatedAt: s.spec?.updatedAt },
-      layoutSummary: s.layout ? { status: s.layout.status, planAssetId: s.layout.planAssetId, proposal: s.layout.proposal } : undefined,
+      ...buildSnapshotSummaries(s),
       refs: [...attRefs, parentRef],
     });
     const t0 = Date.now();
-    const bytes = await imageProvider.editFromRefs([parentBytes], instruction, { quality: q, size: '1024x1024' });
+    const bytes = await imageProvider.editFromRefs([parentBytes], instruction, { quality: q, size: '1024x1024', signal });
     const durationMs = Date.now() - t0;
     if (!bytes) return { error: '局部修复未返回图（编辑模型无输出）' };
     const asset = await saveAsset(pid, bytes, { kind: 'booth-image', prompt: `revise: ${fix}`, parentId: parentAssetId, provider: providerName, model: imageModel, quality: q, size: '1024x1024', mode: 'revise', durationMs, renderInputId: snap.id, sourceAssetIds: [parentAssetId], sourceAttachmentIds: attIds });

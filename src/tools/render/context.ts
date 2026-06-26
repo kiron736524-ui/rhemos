@@ -2,7 +2,7 @@ import { DEFAULT_IMAGE_QUALITY } from '@/models/gateway';
 import { IMAGE_MODEL, IMAGE_PROVIDER } from '@/models/image-providers';
 import { checkBoothLayout, failMessages, hasBlocker, type BoothRuleIssue } from '@/lib/booth-rules';
 import { buildFootprintLock, cadPromptLock } from '@/lib/cad';
-import { loadAssetBytes, markLayoutConfirmed, readState, saveRenderInputSnapshot } from '@/lib/storage';
+import { buildSnapshotSummaries, loadAssetBytes, readState, saveRenderInputSnapshot } from '@/lib/storage';
 import { selectUsableAttachmentsFromAnalyses, toRenderInputRefs } from '@/lib/asset-analysis';
 import { writeImagePrompt } from '@/agent/prompt-writer';
 import type { Asset, RenderInputOperation, RenderInputRef, RenderInputSnapshot } from '@/lib/types';
@@ -34,6 +34,7 @@ export const isRenderError = (x: unknown): x is RenderError => typeof x === 'obj
 export interface RenderContext {
   pid: string;
   runId: string | null;
+  signal?: AbortSignal; // 客户端断流信号（透传到 fal，可取消在飞生图）
   intent: string;
   mode: 'concept' | 'final';
   views: string[]; // 已按 MAX_VIEWS 截断
@@ -66,8 +67,8 @@ export async function batchGenerate(n: number, gen: () => Promise<Uint8Array | n
  * footprint/layout 锁 + frontPrompt（prompt-writer）+ 快照工厂。
  * 返回 RenderContext（成功）或 RenderError（execute 直接早退）。
  */
-export async function resolveRenderContext(args: RenderArgs, raw: { pid: string; runId: string | null }): Promise<RenderContext | RenderError> {
-  const { pid, runId } = raw;
+export async function resolveRenderContext(args: RenderArgs, raw: { pid: string; runId: string | null; signal?: AbortSignal }): Promise<RenderContext | RenderError> {
+  const { pid, runId, signal } = raw;
   const { intent, planAssetId, mode, size } = args;
   let views = args.views;
   const s = await readState(pid);
@@ -116,8 +117,7 @@ export async function resolveRenderContext(args: RenderArgs, raw: { pid: string;
   }
 
   // D32 输入快照：spec/layout 摘要 + 每次 provider 调用前固化一条（provider 失败也留证据，不存 base64）。
-  const specSummary = { hasSpec: !!s.spec, identity: s.spec?.identity, invariants: s.spec?.invariants, selfCheckCriteria: s.spec?.selfCheckCriteria, updatedAt: s.spec?.updatedAt };
-  const layoutSummary = s.layout ? { status: s.layout.status, planAssetId: s.layout.planAssetId, proposal: s.layout.proposal } : undefined;
+  const { specSummary, layoutSummary } = buildSnapshotSummaries(s);
   const layoutLock = cadPromptLock(s.layout?.proposal);
   const planId = effectivePlanAssetId ?? '';
   // D33：本轮被选用的上传素材（selectedAttachments 优先，空则 fallback 用分析推导）→ 转 snapshot attachment refs。
@@ -129,7 +129,8 @@ export async function resolveRenderContext(args: RenderArgs, raw: { pid: string;
 
   const plan = effectivePlanAssetId ? await loadAssetBytes(pid, effectivePlanAssetId).catch(() => null) : null;
   if (effectivePlanAssetId && !plan) return { error: `找不到平面图资产 ${effectivePlanAssetId}` };
-  if (effectivePlanAssetId && plan) await markLayoutConfirmed(pid, effectivePlanAssetId);
+  // 布局确认只发生在 /reference 路由（用户在编辑器定稿那一刻）；render 不再重复 markLayoutConfirmed，
+  // 避免用过期/显式 planAssetId 覆盖已确认状态（D39）。
 
   // prompt-writer 子 agent：中文意图 → 英文主图 prompt（不占大脑上下文）。深化场景（已有基准图）不需要。
   const frontPrompt = views.length && baseAsset
@@ -145,6 +146,7 @@ export async function resolveRenderContext(args: RenderArgs, raw: { pid: string;
   return {
     pid,
     runId,
+    signal,
     intent,
     mode,
     views,

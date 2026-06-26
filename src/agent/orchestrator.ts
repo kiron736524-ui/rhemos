@@ -1,6 +1,5 @@
 import { hasToolCall, stepCountIs, type StopCondition } from 'ai';
-import { gateway } from '@ai-sdk/gateway';
-import { MODEL_IDS } from '@/models/gateway';
+import { brain } from '@/models/gateway';
 import { buildSystemPrompt } from './system-prompt';
 import { analyzeReference } from '@/tools/analyze-reference';
 import { readProjectState } from '@/tools/read-project-state';
@@ -27,7 +26,7 @@ export const tools = {
   task_complete: taskComplete,
 };
 
-// 正式生图预算：统计 generate_best_of_n 的 n + revise_asset 次数，超额即停（防失控）。
+// 正式生图预算：统计 render 的 n + revise_asset 次数，超额即停（防失控）。
 function imageBudget(maxImages: number): StopCondition<typeof tools> {
   return ({ steps }) => {
     let imgs = 0;
@@ -48,12 +47,12 @@ function imageBudget(maxImages: number): StopCondition<typeof tools> {
 }
 
 /**
- * Orchestrator（默认单脑 = Sonnet 4.6，可用 RHEMOS_BRAIN_MODEL 升 Opus）。prompt-writer 默认 Opus；inspect 默认 Sonnet。
- * 退出：大脑自己 task_complete。兜底：总生图 ≤5、步数 ≤16。
+ * Orchestrator（默认单脑 = Sonnet 4.6，可用 RHEMOS_BRAIN_MODEL 升 Opus）。prompt-writer 默认 Opus 4.8。
+ * 退出：大脑自己 task_complete。兜底：总生图 ≤16、步数 ≤16。判图/打分已删除（D39），无 inspect 档。
  */
 export async function orchestratorConfig() {
   return {
-    model: gateway.languageModel(MODEL_IDS.brain),
+    model: brain(),
     system: await buildSystemPrompt(),
     tools,
     stopWhen: [hasToolCall('task_complete'), imageBudget(16), stepCountIs(16)],

@@ -15,6 +15,8 @@ export type ImageSize = '1024x1024' | '1536x1024' | '1024x1536';
 export interface ImageGenOptions {
   quality?: ImageQuality;
   size?: ImageSize;
+  /** 外部取消信号（客户端断流）：透传到 fal fetch，可取消在飞的生图调用。 */
+  signal?: AbortSignal;
 }
 
 export interface ImageProvider {
