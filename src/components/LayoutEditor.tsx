@@ -506,7 +506,7 @@ export default function LayoutEditor({
                 </label>
               ))}
             </div>
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-2 gap-2">
               <label>
                 <span className="mb-1 block text-ink-500">高度</span>
                 <input type="number" step={0.1} value={sel.height ?? ''} onChange={(e) => update(sel.id, { height: e.target.value === '' ? undefined : Number(e.target.value) })} className="w-full rounded border border-ink-700 bg-ink-900 px-2 py-1 text-ink-100 outline-none" />
@@ -518,21 +518,27 @@ export default function LayoutEditor({
                   {Object.entries(FACING_LABEL).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
                 </select>
               </label>
-              <label>
-                <span className="mb-1 block text-ink-500">层级</span>
-                <select value={sel.layer ?? 'space'} onChange={(e) => update(sel.id, { layer: e.target.value as LayoutLayer })} className="w-full rounded border border-ink-700 bg-ink-900 px-2 py-1 text-ink-100 outline-none">
-                  {LAYERS.map((l) => <option key={l} value={l}>{l}</option>)}
-                </select>
-              </label>
             </div>
-            <label className="block">
-              <span className="mb-1 block text-ink-500">材质</span>
-              <input value={sel.material ?? ''} onChange={(e) => update(sel.id, { material: e.target.value })} className="w-full rounded border border-ink-700 bg-ink-900 px-2 py-1 text-ink-100 outline-none focus:border-accent" />
-            </label>
-            <label className="block">
-              <span className="mb-1 block text-ink-500">描述 / 进入 prompt</span>
-              <textarea value={sel.description ?? ''} onChange={(e) => update(sel.id, { description: e.target.value })} rows={3} className="w-full resize-none rounded border border-ink-700 bg-ink-900 px-2 py-1 text-ink-100 outline-none focus:border-accent" />
-            </label>
+            {/* 专业字段对终端用户折叠：拖好位置即可出图，层级/材质/描述留空也行。 */}
+            <details className="rounded border border-ink-800 bg-ink-900/40 px-2 py-1.5">
+              <summary className="cursor-pointer select-none text-[11px] text-ink-500">高级（层级 / 材质 / 描述）· 留空也能出图</summary>
+              <div className="mt-2 space-y-2">
+                <label className="block">
+                  <span className="mb-1 block text-ink-500">层级</span>
+                  <select value={sel.layer ?? 'space'} onChange={(e) => update(sel.id, { layer: e.target.value as LayoutLayer })} className="w-full rounded border border-ink-700 bg-ink-900 px-2 py-1 text-ink-100 outline-none">
+                    {LAYERS.map((l) => <option key={l} value={l}>{l}</option>)}
+                  </select>
+                </label>
+                <label className="block">
+                  <span className="mb-1 block text-ink-500">材质</span>
+                  <input value={sel.material ?? ''} onChange={(e) => update(sel.id, { material: e.target.value })} className="w-full rounded border border-ink-700 bg-ink-900 px-2 py-1 text-ink-100 outline-none focus:border-accent" />
+                </label>
+                <label className="block">
+                  <span className="mb-1 block text-ink-500">描述 / 进入 prompt</span>
+                  <textarea value={sel.description ?? ''} onChange={(e) => update(sel.id, { description: e.target.value })} rows={3} className="w-full resize-none rounded border border-ink-700 bg-ink-900 px-2 py-1 text-ink-100 outline-none focus:border-accent" />
+                </label>
+              </div>
+            </details>
             <div className="grid grid-cols-5 gap-1.5">
               {(['back', 'front', 'left', 'right', 'center'] as const).map((a) => (
                 <button key={a} type="button" onClick={() => alignSel(a)} className="u-tap rounded border border-ink-700 px-1.5 py-1 text-[11px] text-ink-300 hover:border-accent/60">{a === 'center' ? '中' : a}</button>

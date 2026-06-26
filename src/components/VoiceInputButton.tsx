@@ -115,7 +115,7 @@ export default function VoiceInputButton({
       setSeconds(0);
       setErrorMsg('');
       errorResetRef.current = null;
-    }, 2500);
+    }, 6000); // 延长停留：权限/设备类错误信息较长，来得及读
   }, []);
 
   useEffect(

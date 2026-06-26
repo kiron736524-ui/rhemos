@@ -25,6 +25,7 @@ interface ProjectState {
   id: string;
   assets: Asset[];
   baseAssetId?: string;
+  layout?: { status?: string } | null;
 }
 interface ProjectSummary {
   id: string;
@@ -428,7 +429,7 @@ function ChoiceCards({ data, onSubmit, busy }: { data: ChoiceData; onSubmit: (te
         <div className="space-y-3">
           <div className="flex items-start justify-between gap-3">
             <div className="text-[14px] font-medium leading-relaxed text-ink-50">{current.question}</div>
-            <span className="mono-tag shrink-0 rounded bg-ink-900 px-2 py-1 text-ink-500">STEP 1</span>
+            <span className="mono-tag shrink-0 rounded bg-ink-900 px-2 py-1 text-ink-500">{data.locked?.length ? `已确认 ${data.locked.length} 项` : '待你选择'}</span>
           </div>
           <p className="text-[12px] leading-relaxed text-ink-500">先锁定这一项；后续布局选择会基于本次结果重新生成。</p>
           <div className={`grid grid-cols-1 gap-3 ${current.options.some((o) => o.layout) ? 'xl:grid-cols-2' : 'sm:grid-cols-2'}`}>
@@ -498,6 +499,7 @@ export default function Workbench() {
   const [files, setFiles] = useState<File[]>([]);
   const [uploading, setUploading] = useState(false);
   const [selectingCandidate, setSelectingCandidate] = useState<string | null>(null);
+  const [renderElapsed, setRenderElapsed] = useState(0);
   const [preview, setPreview] = useState<PreviewState | null>(null);
   const [editor, setEditor] = useState<{ footprint: { length: number; width: number }; modules: LayoutModule[]; openings?: string[] } | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -630,6 +632,8 @@ export default function Workbench() {
       if (!r.ok) throw new Error('promote failed');
       await refreshState();
       await refreshProjects();
+      // 选基准后自动承接 loop：发一条人话让大脑知道已选定，并给出下一步建议（多视角 / 换风格 / 局部精修），具体等用户说。
+      void send('我选定了这张作为基准方案图。请确认收到，并简要说一下接下来可以做什么（比如出多视角、换风格、局部精修）——具体要哪些等我说。');
     } catch {
       alert('选择候选图失败，请稍后重试。');
     } finally {
@@ -696,7 +700,7 @@ export default function Workbench() {
         body: JSON.stringify({ png: dataUrl, layout }),
       });
       const d = (await r.json()) as { assetId?: string };
-      if (d.assetId) void send(`已用布局编辑器定稿平面图（参考资产 ${d.assetId}）。请用 render（planAssetId=该参考资产，views=[]，n=2，autoCheck=false）按这张平面图先生成两张首稿主图候选，暂时不要出多视角/俯视/自动精修，等我选择基准图后再继续。`);
+      if (d.assetId) void send(`我用编辑器把布局定稿好了（参考资产 ${d.assetId}）。请按这张平面图先出两张首稿主图候选给我选，先不用出多视角。`);
     } catch {
       /* ignore */
     }
@@ -709,7 +713,7 @@ export default function Workbench() {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ decision: 'skipped' }),
     }).finally(() => {
-      void send('不精调了，按原方案的布局直接出图。请调用 render（views=[]，n=2，autoCheck=false）先生成两张首稿主图候选，暂时不要出多视角/俯视/自动精修，等我选择基准图后再继续。');
+      void send('布局不再精调了，就按原方案的布局直接出图。先出两张首稿主图候选给我选，先不用出多视角。');
     });
   };
 
@@ -727,6 +731,7 @@ export default function Workbench() {
 
   let progress = '大脑思考中';
   let activeTool = '';
+  let activeRenderViews: string[] | null = null;
   for (const m of messages) {
     if (m.role !== 'assistant') continue;
     for (const p of m.parts) {
@@ -735,14 +740,38 @@ export default function Workbench() {
         if (tp.state !== 'output-available' && tp.state !== 'output-error') {
           activeTool = getToolName(p);
           progress = PROGRESS[activeTool] ?? progress;
+          const inViews = (tp.input as { views?: unknown } | undefined)?.views;
+          activeRenderViews = activeTool === 'render' ? (Array.isArray(inViews) ? (inViews as string[]) : []) : null;
         }
       }
     }
   }
   // 副标只在真正生图的工具阶段提示"生图较慢"，读状态/写方案等阶段不误导
   const isRendering = ['render', 'revise_asset'].includes(activeTool);
+  // 生图阶段的人话进度：首稿候选 vs 指定视角 vs 精修
+  const renderHint =
+    activeTool === 'render'
+      ? activeRenderViews && activeRenderViews.length
+        ? `正在出 ${activeRenderViews.map(viewLabel).join(' / ')}`
+        : '正在生成首稿主图候选'
+      : activeTool === 'revise_asset'
+        ? '正在定向精修'
+        : '';
+  // 长任务计时：生图阶段每秒 +1（gpt-image-2 high 较慢，让用户看到已等多久），结束自动停止。
+  useEffect(() => {
+    if (!isRendering) return;
+    const start = Date.now();
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setRenderElapsed(0);
+    const t = setInterval(() => setRenderElapsed(Math.floor((Date.now() - start) / 1000)), 1000);
+    return () => clearInterval(t);
+  }, [isRendering]);
 
   const assets = (state?.assets ?? []).slice().reverse();
+  // 服务端状态显形（状态条）：当前基准图 + 布局状态，让用户随时知道「进行到哪了」。
+  const baseAsset = state?.baseAssetId ? state.assets.find((a) => a.id === state.baseAssetId) : undefined;
+  const layoutStatusLabel =
+    state?.layout?.status === 'confirmed' ? '布局已确认' : state?.layout?.status === 'skipped' ? '布局已跳过' : state?.layout?.status === 'pending' ? '布局待确认' : '';
   const deliveryPreviewUrls = useMemo(
     () => messages.flatMap((m) => (m.role === 'assistant' ? extractDeliveries(m.parts).flatMap((g) => g.items.map((i) => i.url)) : [])),
     [messages],
@@ -861,8 +890,18 @@ export default function Workbench() {
 
       {/* ───────── 中：对话 ───────── */}
       <section className="flex min-w-0 flex-1 flex-col bg-ink-900">
-        <header className="flex shrink-0 items-center justify-between border-b border-ink-800 px-6 py-3.5">
-          <h1 className="truncate text-[15px] font-medium text-ink-50">{currentTitle}</h1>
+        <header className="flex shrink-0 items-center gap-3 border-b border-ink-800 px-6 py-3.5">
+          <h1 className="min-w-0 max-w-[40%] shrink-0 truncate text-[15px] font-medium text-ink-50">{currentTitle}</h1>
+          <div className="mono-tag flex min-w-0 flex-1 items-center justify-center gap-3 text-ink-500">
+            {baseAsset && (
+              <span className="flex items-center gap-1.5 text-ink-300" title="当前基准方案图">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={baseAsset.url} alt="基准" className="h-5 w-5 rounded object-cover ring-1 ring-signal/50" />
+                基准已选
+              </span>
+            )}
+            {layoutStatusLabel && <span className="hidden sm:inline">{layoutStatusLabel}</span>}
+          </div>
           <span className="mono-tag flex shrink-0 items-center gap-1.5 text-ink-400">
             <span className={`h-1.5 w-1.5 rounded-full ${busy ? 'bg-signal pulse-dot' : 'bg-accent'}`} />
             {busy ? '在制中' : 'READY'}
@@ -876,7 +915,7 @@ export default function Workbench() {
                 <span className="mono-tag text-ink-600">RHEMOS · BOOTH DESIGN AGENT</span>
                 <h2 className="mt-4 max-w-md text-2xl font-semibold leading-snug text-ink-50">说出你的展台需求</h2>
                 <p className="mt-3 max-w-md text-[13.5px] leading-relaxed text-ink-300">
-                  也可上传参考图 / PDF / Word / Excel。Rhemos 会澄清 → 写方案 → 并行生图 → 客观择优 → 交付。深化、换风格、多视角、修改都直接对它说。
+                  也可上传参考图 / PDF / Word / Excel。Rhemos 会先和你澄清需求 → 给方案和俯视布局 → 出几张主图候选让你选基准 → 再做多视角 / 局部精修。深化、换风格、改细节都直接对它说。
                 </p>
                 <div className="mt-7 flex w-full max-w-lg flex-col gap-2">
                   {SUGGESTIONS.map((s, i) => (
@@ -969,7 +1008,13 @@ export default function Workbench() {
                       g.grouped ? (
                         <ViewSet key={gi} group={g} onZoom={openPreview} />
                       ) : (
-                        <div key={gi} className={`mt-1 w-full gap-3 ${g.type === 'candidate-set' ? 'grid sm:grid-cols-2' : 'flex flex-wrap'}`}>
+                        <div key={gi} className="mt-1 w-full">
+                          {g.type === 'candidate-set' && (
+                            <p className="mb-2 text-[12px] leading-relaxed text-ink-400">
+                              <span className="text-accent">第一步：</span>选一张作基准，后续多视角 / 局部精修都基于它。
+                            </p>
+                          )}
+                          <div className={g.type === 'candidate-set' ? 'grid w-full grid-cols-1 gap-3 sm:grid-cols-2' : 'flex w-full flex-wrap gap-3'}>
                           {g.items.map((img, ii) => {
                             const rec = img.recommended;
                             const candidate = g.type === 'candidate-set';
@@ -1006,6 +1051,7 @@ export default function Workbench() {
                               </figure>
                             );
                           })}
+                          </div>
                         </div>
                       ),
                     )}
@@ -1016,12 +1062,22 @@ export default function Workbench() {
 
             {busy && (
               <div className="fade-up flex items-center gap-3 rounded-lg border border-ink-800 bg-ink-850 px-4 py-3">
-                <span className="relative flex h-4 w-4 items-center justify-center">
+                <span className="relative flex h-4 w-4 shrink-0 items-center justify-center">
                   <span className="absolute h-4 w-4 rounded-full border border-accent/30" />
                   <span className="h-2 w-2 rounded-full bg-accent pulse-dot" />
                 </span>
-                <span className="text-[13px] text-ink-100">{progress}…</span>
-                <span className="mono-tag ml-auto text-ink-500">{isRendering ? 'RENDERING · 生图较慢' : 'WORKING'}</span>
+                <div className="min-w-0 flex-1">
+                  <div className="text-[13px] text-ink-100">
+                    {progress}
+                    {isRendering && renderHint ? ` · ${renderHint}` : ''}…
+                  </div>
+                  {isRendering && (
+                    <div className="mono-tag mt-0.5 text-ink-500">
+                      gpt-image-2 出图较慢，通常 1–3 分钟，请勿关闭页面{renderElapsed > 0 ? ` · 已等待 ${renderElapsed}s` : ''}
+                    </div>
+                  )}
+                </div>
+                <span className="mono-tag ml-auto shrink-0 text-ink-500">{isRendering ? 'RENDERING' : 'WORKING'}</span>
               </div>
             )}
             {error && !busy && (
@@ -1212,8 +1268,11 @@ export default function Workbench() {
       {editor && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink-950/92 p-6 backdrop-blur-sm">
           <div className="max-h-full overflow-auto rounded-xl border border-ink-800 bg-ink-900 p-5">
-            <div className="mb-3 flex items-center justify-between gap-4">
-              <span className="text-[14px] font-medium text-ink-50">布局编辑器 · 拖拽 / 缩放 / 改形状，确认后按它出 3D 图</span>
+            <div className="mb-3 flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                <span className="text-[14px] font-medium text-ink-50">布局编辑器 · 拖拽 / 缩放 / 改形状，确认后按它出 3D 图</span>
+                <p className="mt-1 text-[12px] leading-relaxed text-ink-500">新手提示：拖动方块摆好大致位置就行，材质 / 描述等高级项留空也能出图；不想调就点右侧「按原方案直接出」。</p>
+              </div>
               <button type="button" onClick={handleEditorSkip} className="u-press shrink-0 rounded-lg border border-ink-600 px-3 py-1.5 text-[12px] text-ink-300 hover:text-ink-100">
                 ⤴ 按原方案直接出
               </button>
