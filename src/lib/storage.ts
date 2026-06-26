@@ -189,6 +189,30 @@ export function promoteCandidateAsset(id: string, assetId: string): Promise<Asse
   });
 }
 
+/** 资产库重命名（用户自定义显示名，限长 80）。 */
+export function renameAsset(id: string, assetId: string, name: string): Promise<void> {
+  return withLock(id, async () => {
+    if (!/^[\w-]+$/.test(assetId)) throw new Error('bad asset id');
+    const s = await readState(id);
+    const a = s.assets.find((x) => x.id === assetId);
+    if (!a) throw new Error(`asset not found: ${assetId}`);
+    a.name = name.trim().slice(0, 80) || undefined;
+    await writeStateUnlocked(s);
+  });
+}
+
+/** 资产库置顶开关（前端排序时 pinned 浮到最前）。 */
+export function setAssetPinned(id: string, assetId: string, pinned: boolean): Promise<void> {
+  return withLock(id, async () => {
+    if (!/^[\w-]+$/.test(assetId)) throw new Error('bad asset id');
+    const s = await readState(id);
+    const a = s.assets.find((x) => x.id === assetId);
+    if (!a) throw new Error(`asset not found: ${assetId}`);
+    a.pinned = pinned || undefined;
+    await writeStateUnlocked(s);
+  });
+}
+
 const rand = () => Math.random().toString(36).slice(2, 8);
 const safeExt = (filename: string, mediaType: string) => {
   const ext = filename.toLowerCase().match(/\.([a-z0-9]{1,8})$/)?.[1];

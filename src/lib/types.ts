@@ -70,6 +70,8 @@ export interface Asset {
   prompt?: string;
   parentId?: string; // revise 来源资产
   createdAt: string;
+  name?: string; // 用户自定义显示名（资产库重命名）
+  pinned?: boolean; // 资产库置顶（前端排序时浮到最前）
   // 生成元数据（可选，事项4）：provider/model/quality/size/mode/耗时，供排查与对比不同图像供应商。
   provider?: string;
   model?: string;
