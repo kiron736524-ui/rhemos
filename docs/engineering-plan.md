@@ -3,6 +3,8 @@
 > 配套文档：策略与决策见 [`../rhemos-build-plan.md`](../rhemos-build-plan.md)；领域知识层（大脑的"灵魂"）见 [`./domain-knowledge.md`](./domain-knowledge.md)。
 > 本文回答「**怎么建**」：技术栈 → 从大到小的架构 → 模块分解 → 关键数据结构与控制流 → 分阶段任务与验收。
 > 进度：Phase 0-4 已实现并实测（详见第 5 节各项勾选）；Phase 5（生产化）待部署时做。
+>
+> **⚠️ D39（2026-06-26）收敛后部分内容已过时**：本文保留 Phase 0-4 历史规划（自省闭环 / inspector 选型 / 判图沉淀回 asset / `final=high` / `autoCheck` / `IMAGE_PROVIDER` 可插拔等）。as-built 已变：**判图/打分整体删除**、**生图锁定 gpt-image-2/fal（无 Gemini fallback）**、**几何统一 `src/lib/geometry.ts`**、**render 拆 `src/tools/render/*`**、final 默认 medium。凡下文出现 inspect / autoCheck / 自省闭环 / final=high，请以 [`ARCHITECTURE.md`](ARCHITECTURE.md) + [`DECISIONS.md`](DECISIONS.md) **D39** 为准。
 
 ---
 

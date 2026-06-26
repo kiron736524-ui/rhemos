@@ -3,7 +3,7 @@
 > 这是大脑的"灵魂"。配套：[`../rhemos-build-plan.md`](../rhemos-build-plan.md)（策略）、[`./engineering-plan.md`](./engineering-plan.md)（工程）。
 > 本文把旧 rhemax 挖出的领域知识，按新 Loop Agent 体系**重组**为四件套，并给出未尽部分的完成计划。
 > 素材来源：旧 rhemax `src/lib/skills/content/*.md`、`docs/dialogue-system.md`、`过程提示词和图标/`。
-> 当前实现以 [`DECISIONS.md`](DECISIONS.md) D34 为准：首稿默认两张 candidate-set 候选，由用户选择基准图；生成后判图/一致性检查不是默认链路，只在用户要求 AI 诊断、筛选或修正时启用。
+> 当前实现以 [`DECISIONS.md`](DECISIONS.md) D34 + **D39** 为准：首稿默认两张 candidate-set 候选，由用户选择基准图；**判图/打分已整体删除（D39）**，不再是任何链路的一环——多视角一致性靠**进化式参考链**（串行累积、无门控）。下文凡提"判图 / inspect / 自检 / autoCheck"均为历史设计，按 D39 视作已删除。
 
 ---
 
