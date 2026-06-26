@@ -3,6 +3,7 @@ import { gateway } from '@ai-sdk/gateway';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { MODEL_IDS } from '@/models/gateway';
+import { appendRunEvent } from '@/lib/storage';
 
 // prompt-writer 子 agent（工具内，不占大脑上下文）：把大脑给的**中文意图** + 展台 identity
 // 翻成**英文**生图/改图 prompt。带「写图执行知识」（prompt-craft/examples/materials/styles/...）。
@@ -26,10 +27,11 @@ async function writerSystem(): Promise<string> {
 }
 
 export type PromptKind = 'front' | 'plan' | 'concept' | 'revise';
+type TraceContext = { projectId?: string; runId?: string | null; purpose?: string };
 
 /** 中文意图 → 英文生图/改图 prompt（worker，含执行知识；中间推理不回大脑）。 */
-export async function writeImagePrompt(args: { intent: string; identity?: string; kind?: PromptKind }): Promise<string> {
-  const { intent, identity = '', kind = 'front' } = args;
+export async function writeImagePrompt(args: { intent: string; identity?: string; kind?: PromptKind; trace?: TraceContext }): Promise<string> {
+  const { intent, identity = '', kind = 'front', trace } = args;
   const usage =
     kind === 'plan'
       ? '用途：以俯视平面图为硬参考出 3D 正面主图（严格贴合平面布局，含 L 形台等）。'
@@ -46,7 +48,20 @@ export async function writeImagePrompt(args: { intent: string; identity?: string
   ]
     .filter(Boolean)
     .join('\n\n');
-  // 复用 MODEL_IDS.inspect 档（现为 Opus 4.8，用户指定质量优先）；与判图同模型。
-  const r = await generateText({ model: gateway.languageModel(MODEL_IDS.inspect), system: await writerSystem(), prompt: ask });
+  const model = MODEL_IDS.promptWriter;
+  const r = await generateText({ model: gateway.languageModel(model), system: await writerSystem(), prompt: ask });
+  if (trace?.projectId) {
+    await appendRunEvent(trace.projectId, trace.runId ?? null, {
+      type: 'tool',
+      toolName: 'prompt_writer',
+      outputSummary: {
+        model,
+        kind,
+        purpose: trace.purpose,
+        promptChars: ask.length,
+        usage: (r as { totalUsage?: unknown; usage?: unknown }).totalUsage ?? (r as { usage?: unknown }).usage,
+      },
+    });
+  }
   return r.text.trim();
 }

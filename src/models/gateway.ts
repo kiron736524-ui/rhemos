@@ -1,17 +1,23 @@
 import { gateway } from '@ai-sdk/gateway';
 
+const envModel = (name: string, fallback: string) => process.env[name]?.trim() || fallback;
+
 /**
  * 多来源模型路由：脑 / 判图 / prompt-writer / 语音清理经 **Vercel AI Gateway**；
  * **gpt-image-2 经 fal.ai**（文生图 + 图编辑，见下方 fal 封装）；**ASR 经阿里云 DashScope**（直连）。
  * 鉴权：AI_GATEWAY_API_KEY / FAL_API_KEY / DASHSCOPE_API_KEY（均在 .env.local，已 gitignore）。
  */
 export const MODEL_IDS = {
-  /** 对话 + 工程脑：负责澄清、写 DesignSpec、写 prompt、写纠正 prompt、判断 */
-  brain: 'anthropic/claude-opus-4.8',
+  /** 对话 + 工程脑：负责澄清、写 DesignSpec、编排工具。默认 Sonnet 4.6 控成本；可用 RHEMOS_BRAIN_MODEL 覆盖回 Opus。 */
+  brain: envModel('RHEMOS_BRAIN_MODEL', 'anthropic/claude-sonnet-4.6'),
   /** 生图 + 改图 */
   image: 'openai/gpt-image-2',
-  /** 判图自检 + 工具内 prompt-writer 共用档。用户指定升 Opus 4.8（质量优先，与大脑同款；成本更高）。 */
-  inspect: 'anthropic/claude-opus-4.8',
+  /** 工具内 prompt-writer：保留 Opus 4.8 写图与物理/世界知识优势；可用 RHEMOS_PROMPT_MODEL 覆盖。 */
+  promptWriter: envModel('RHEMOS_PROMPT_MODEL', 'anthropic/claude-opus-4.8'),
+  /** 判图自检：默认 Sonnet 4.6；需要强诊断可用 RHEMOS_INSPECT_MODEL=anthropic/claude-opus-4.8。 */
+  inspect: envModel('RHEMOS_INSPECT_MODEL', 'anthropic/claude-sonnet-4.6'),
+  /** 成本解释/估算：走便宜档 DeepSeek。 */
+  costEstimator: envModel('RHEMOS_COST_MODEL', 'deepseek/deepseek-v4-flash'),
   /** 参考图条件化候选（当前本地测试版不作为生图 fallback，生图/改图统一走 gpt-image-2）。 */
   imageEdit: 'google/gemini-3-pro-image',
   /** 语音转写后的清理整理（去语气词/去重复/轻度理顺）—— efficiency 档，便宜快 */
@@ -30,7 +36,7 @@ export const INSPECT_CANDIDATES = [
   'openai/gpt-5',                // 与 gpt-image-2 同家（确切串待核对）
 ] as const;
 
-/** 语言/推理脑（Opus 4.8） */
+/** 语言/推理脑（默认 Sonnet 4.6；见 MODEL_IDS.brain / RHEMOS_BRAIN_MODEL） */
 export const brain = () => gateway.languageModel(MODEL_IDS.brain);
 
 /** 视觉判图器（默认档见 MODEL_IDS.inspect，可传入候选 id 切换/升级） */

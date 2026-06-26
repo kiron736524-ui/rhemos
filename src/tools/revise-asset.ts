@@ -33,7 +33,7 @@ export const reviseAsset = tool({
       return { error: e instanceof Error ? e.message : String(e), code: 'IMAGE_PROVIDER_INVALID' };
     }
     // prompt-writer：中文 fix → 英文"只改一处、其余不变"指令
-    const instruction = withRenderStyle(await writeImagePrompt({ intent: fix, identity, kind: 'revise' }));
+    const instruction = withRenderStyle(await writeImagePrompt({ intent: fix, identity, kind: 'revise', trace: { projectId: pid, runId, purpose: 'revision prompt' } }));
     // D32 输入快照：edit 前固化（基于哪张图、什么 fix prompt、什么 spec/layout），provider 失败也留证据。
     const parentRef: RenderInputRef = { id: parentAssetId, kind: 'asset', role: 'previous_render', url: `/api/assets/${parentAssetId}?project=${pid}` };
     // D33：带上本项目被选用的上传素材（selectedAttachments 优先，空则 fallback 分析推导）；parentAssetId 始终作为 sourceAssetIds。
@@ -60,7 +60,7 @@ export const reviseAsset = tool({
     const durationMs = Date.now() - t0;
     if (!bytes) return { error: '局部修复未返回图（编辑模型无输出）' };
     const asset = await saveAsset(pid, bytes, { kind: 'booth-image', prompt: `revise: ${fix}`, parentId: parentAssetId, provider: providerName, model: imageModel, quality: q, size: '1024x1024', mode: 'revise', durationMs, renderInputId: snap.id, sourceAssetIds: [parentAssetId], sourceAttachmentIds: attIds });
-    const insp = await inspectImage(bytes, criteria);
+    const insp = await inspectImage(bytes, criteria, { projectId: pid, runId, purpose: 'revision check' });
     await addInspection(pid, asset.id, toInspectionResult(insp, MODEL_IDS.inspect));
     // 统一交付协议（D24 契约①）：单张修订图。
     const deliverable: Deliverable = {

@@ -6,6 +6,9 @@ import { appendRunEvent, createRun, finishRun } from '@/lib/storage';
 export const runtime = 'nodejs'; // 工具用 node:fs，需 nodejs 运行时
 export const maxDuration = 600; // best-of-N + revise 多张生图，放宽超时（生产部署需对应平台上限）
 const RUN_IMAGE_LIMIT = 16;
+const CONTEXT_RECENT_MESSAGES = Number(process.env.RHEMOS_CONTEXT_RECENT_MESSAGES ?? 8);
+const OLD_USER_TEXT_LIMIT = Number(process.env.RHEMOS_CONTEXT_OLD_USER_CHARS ?? 1800);
+const OLD_ASSISTANT_TEXT_LIMIT = Number(process.env.RHEMOS_CONTEXT_OLD_ASSISTANT_CHARS ?? 700);
 
 // 防 Anthropic/Gateway 400：多轮历史里 tool 调用的入参若不是对象（空参工具回传后常变成 ""/undefined/数组），
 // 会触发 "tool_use.input: Input should be a valid dictionary"。强制成 {}，并同时覆盖 input 与 args 两种字段名
@@ -85,15 +88,32 @@ function shortJson(value: unknown, max = TOOL_SUMMARY_MAX): string {
   return s.length > max ? `${s.slice(0, max)}…` : s;
 }
 
-function compactMessagesForModel(messages: UIMessage[]): { messages: UIMessage[]; compacted: number } {
+function compactTextPart(part: unknown, limit: number): { part: unknown; compacted: boolean } {
+  if (!part || typeof part !== 'object' || (part as { type?: unknown }).type !== 'text') return { part, compacted: false };
+  const text = (part as { text?: unknown }).text;
+  if (typeof text !== 'string' || text.length <= limit) return { part, compacted: false };
+  return {
+    part: {
+      ...part,
+      text: `${text.slice(0, limit)}…\n【旧消息已按上下文预算截断；准确项目事实请调用 read_project_state。】`,
+    },
+    compacted: true,
+  };
+}
+
+function compactMessagesForModel(messages: UIMessage[]): { messages: UIMessage[]; compactedTools: number; compactedTexts: number } {
   let compacted = 0;
-  const next = messages.map((msg) => {
+  let compactedTexts = 0;
+  const recentFrom = Math.max(0, messages.length - CONTEXT_RECENT_MESSAGES);
+  const next = messages.map((msg, idx) => {
     const parts = (msg as { parts?: unknown[]; role?: string }).parts;
-    if ((msg as { role?: string }).role !== 'assistant' || !Array.isArray(parts)) return msg;
+    if (!Array.isArray(parts)) return msg;
     const newParts: unknown[] = [];
+    const isRecent = idx >= recentFrom;
+    const role = (msg as { role?: string }).role;
     for (const part of parts) {
       if ((part as { type?: unknown })?.type === 'step-start') continue;
-      if (isToolPart(part) && part.state === 'output-available') {
+      if (role === 'assistant' && isToolPart(part) && part.state === 'output-available') {
         compacted++;
         const toolName = String(part.type).replace(/^tool-/, '');
         newParts.push({
@@ -101,12 +121,15 @@ function compactMessagesForModel(messages: UIMessage[]): { messages: UIMessage[]
           text: `【历史工具 ${toolName} 已执行】输入摘要：${shortJson(summarizeOutput(part.input))}；输出摘要：${shortJson(summarizeOutput(part.output))}。需要准确项目事实请调用 read_project_state。`,
         });
       } else {
-        newParts.push(part);
+        const limit = role === 'user' ? OLD_USER_TEXT_LIMIT : OLD_ASSISTANT_TEXT_LIMIT;
+        const c = isRecent ? { part, compacted: false } : compactTextPart(part, limit);
+        if (c.compacted) compactedTexts++;
+        newParts.push(c.part);
       }
     }
     return { ...msg, parts: newParts } as UIMessage;
   });
-  return { messages: next, compacted };
+  return { messages: next, compactedTools: compacted, compactedTexts };
 }
 
 export async function POST(req: Request) {
@@ -117,7 +140,7 @@ export async function POST(req: Request) {
   // docx/xlsx 在服务端提取成文字/图（模型不能直接读它们）；图片/PDF 原样（原生支持）。
   const preprocessed = await preprocessAttachments(messages, pid);
   const compacted = compactMessagesForModel(preprocessed);
-  if (compacted.compacted) console.warn(`[agent] 压缩了 ${compacted.compacted} 个历史工具输出（模型上下文瘦身，UI 历史不变）`);
+  if (compacted.compactedTools || compacted.compactedTexts) console.warn(`[agent] 上下文瘦身：工具输出 ${compacted.compactedTools} 个，旧文本 ${compacted.compactedTexts} 段（UI 历史不变）`);
   const modelMessages = await convertToModelMessages(compacted.messages);
   const fixed = sanitizeToolInputs(modelMessages as never);
   if (fixed) console.warn(`[agent] 修正了 ${fixed} 个非对象 tool 入参 → {}（防 Gateway 400）`);

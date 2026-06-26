@@ -389,6 +389,21 @@ export function appendRunEvent(id: string, runId: string | null, event: Omit<Run
   });
 }
 
+export async function listRunRecords(projectId: string, limit = 100): Promise<RunRecord[]> {
+  const dir = runsDir(projectId);
+  if (!existsSync(dir)) return [];
+  const files = (await readdir(dir)).filter((f) => f.endsWith('.json'));
+  const runs: RunRecord[] = [];
+  for (const f of files) {
+    try {
+      runs.push(JSON.parse(await readFile(path.join(dir, f), 'utf8')) as RunRecord);
+    } catch {
+      /* 跳过损坏 run */
+    }
+  }
+  return runs.sort((a, b) => b.startedAt.localeCompare(a.startedAt)).slice(0, limit);
+}
+
 export function recordRunDeliverable(id: string, runId: string | null, deliverable: Deliverable): Promise<void> {
   if (!runId) return Promise.resolve();
   return withLock(id, async () => {

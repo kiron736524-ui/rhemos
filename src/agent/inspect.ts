@@ -1,7 +1,15 @@
 import { generateObject } from 'ai';
 import { z } from 'zod';
+import { MODEL_IDS } from '@/models/gateway';
 import { inspector } from '@/models/gateway';
+import { appendRunEvent } from '@/lib/storage';
 import type { InspectionResult } from '@/lib/types';
+
+type TraceContext = { projectId?: string; runId?: string | null; purpose?: string };
+
+function parseModelTrace(modelOrTrace?: string | TraceContext, trace?: TraceContext): { modelId?: string; trace?: TraceContext } {
+  return typeof modelOrTrace === 'string' ? { modelId: modelOrTrace, trace } : { trace: modelOrTrace };
+}
 
 // 单维度判图：pass + 可选分 + issues。供分维度统计（结构/动线/品牌/材质灯光）。
 const dimensionSchema = z.object({
@@ -28,8 +36,9 @@ export const inspectionSchema = z.object({
 });
 export type Inspection = z.infer<typeof inspectionSchema>;
 
-export async function inspectImage(bytes: Uint8Array, criteria: string, modelId?: string): Promise<Inspection> {
-  const { object } = await generateObject({
+export async function inspectImage(bytes: Uint8Array, criteria: string, modelOrTrace?: string | TraceContext, traceArg?: TraceContext): Promise<Inspection> {
+  const { modelId, trace } = parseModelTrace(modelOrTrace, traceArg);
+  const result = await generateObject({
     model: inspector(modelId),
     schema: inspectionSchema,
     messages: [
@@ -45,7 +54,19 @@ export async function inspectImage(bytes: Uint8Array, criteria: string, modelId?
       },
     ],
   });
-  return object;
+  if (trace?.projectId) {
+    await appendRunEvent(trace.projectId, trace.runId ?? null, {
+      type: 'tool',
+      toolName: 'inspect_image',
+      outputSummary: {
+        model: modelId ?? MODEL_IDS.inspect,
+        purpose: trace.purpose,
+        criteriaChars: criteria.length,
+        usage: (result as { totalUsage?: unknown; usage?: unknown }).totalUsage ?? (result as { usage?: unknown }).usage,
+      },
+    });
+  }
+  return result.object;
 }
 
 // 参考图 vs 候选图一致性判图（进化链门控用）：判"换角度后是否还是同一个展台"。
@@ -61,9 +82,11 @@ export async function inspectConsistency(
   refBytes: Uint8Array,
   candidateBytes: Uint8Array,
   viewDesc: string,
-  modelId?: string,
+  modelOrTrace?: string | TraceContext,
+  traceArg?: TraceContext,
 ): Promise<ConsistencyCheck> {
-  const { object } = await generateObject({
+  const { modelId, trace } = parseModelTrace(modelOrTrace, traceArg);
+  const result = await generateObject({
     model: inspector(modelId),
     schema: consistencySchema,
     messages: [
@@ -80,7 +103,19 @@ export async function inspectConsistency(
       },
     ],
   });
-  return object;
+  if (trace?.projectId) {
+    await appendRunEvent(trace.projectId, trace.runId ?? null, {
+      type: 'tool',
+      toolName: 'inspect_consistency',
+      outputSummary: {
+        model: modelId ?? MODEL_IDS.inspect,
+        purpose: trace.purpose,
+        view: viewDesc,
+        usage: (result as { totalUsage?: unknown; usage?: unknown }).totalUsage ?? (result as { usage?: unknown }).usage,
+      },
+    });
+  }
+  return result.object;
 }
 
 export function consistencyToInspectionResult(c: ConsistencyCheck, view: string, gate: number, model: string): InspectionResult {

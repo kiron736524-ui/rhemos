@@ -3,86 +3,16 @@ import { z } from 'zod';
 import { DEFAULT_IMAGE_QUALITY, MAX_PARALLEL_IMAGES, MODEL_IDS, withRenderStyle } from '@/models/gateway';
 import { imageProvider, resolveActiveImageProvider } from '@/models/image-providers';
 import { checkBoothLayout, failMessages, hasBlocker, type BoothRuleIssue } from '@/lib/booth-rules';
+import { cadPromptLock } from '@/lib/cad';
 import { addInspection, appendRunEvent, loadAssetBytes, markLayoutConfirmed, projectIdFromContext, readState, recordRunDeliverable, runIdFromContext, saveAsset, saveCandidateAsset, saveRenderInputSnapshot } from '@/lib/storage';
 import { selectUsableAttachmentsFromAnalyses, toRenderInputRefs } from '@/lib/asset-analysis';
 import { inspectImage, inspectConsistency, toInspectionResult, consistencyToInspectionResult } from '@/agent/inspect';
 import { writeImagePrompt } from '@/agent/prompt-writer';
-import type { BoothLayout, LayoutOpening, Deliverable, DeliverableAsset, RenderInputOperation, RenderInputRef } from '@/lib/types';
+import type { Deliverable, DeliverableAsset, RenderInputOperation, RenderInputRef } from '@/lib/types';
 
 const GATE = 70; // 进化链一致性门控（漂移图不进参考池）
 const MAX_VIEWS = 4; // 单次视角硬上限（事前预算边界）
 const MAX_IMAGES_PER_RENDER = 10; // 单工具内部硬预算：挡住 stopWhen 之前的跑飞
-const LAYOUT_EDGES: LayoutOpening[] = ['back', 'front', 'left', 'right'];
-const EDGE_LABEL: Record<LayoutOpening, string> = { back: 'BACK/top long side', front: 'FRONT/main aisle long side', left: 'LEFT short side', right: 'RIGHT short side' };
-const ZONE_TYPE_LABEL: Record<string, string> = {
-  led: 'LED / main visual wall',
-  screen: 'screen / display surface',
-  stage: 'stage / presentation area',
-  brand: 'brand wall or brand surface',
-  wall: 'wall / vertical partition',
-  reception: 'reception counter',
-  counter: 'counter / service desk',
-  meeting: 'meeting room / talk area',
-  storage: 'storage / back-of-house',
-  product: 'product display',
-  showcase: 'glass showcase / product cabinet',
-  table: 'table',
-  chair: 'chair',
-  totem: 'slim freestanding totem / signage board',
-  truss: 'vertical truss column',
-  door: 'door / opening',
-  plant: 'planting / soft divider',
-  aisle: 'open circulation aisle',
-};
-const SHAPE_LABEL: Record<string, string> = { rect: 'rectangle', l: 'L-shaped footprint', circle: 'circle/ellipse', capsule: 'rounded capsule', line: 'linear strip' };
-const fmtM = (n: number) => `${Number.isInteger(n) ? n : Number(n.toFixed(2))}m`;
-
-const edgeLength = (layout: BoothLayout, edge: LayoutOpening) => (edge === 'back' || edge === 'front' ? layout.length : layout.width);
-const touchingEdges = (layout: BoothLayout, z: BoothLayout['zones'][number]) => {
-  const eps = 0.05;
-  const touches: string[] = [];
-  if (z.y <= eps) touches.push(EDGE_LABEL.back);
-  if (z.y + z.h >= layout.width - eps) touches.push(EDGE_LABEL.front);
-  if (z.x <= eps) touches.push(EDGE_LABEL.left);
-  if (z.x + z.w >= layout.length - eps) touches.push(EDGE_LABEL.right);
-  return touches.length ? touches.join(', ') : 'interior';
-};
-
-function layoutConstraintText(layout?: BoothLayout): string {
-  if (!layout) return '';
-  const openings = Array.from(new Set(layout.openings ?? [])).filter((e): e is LayoutOpening => LAYOUT_EDGES.includes(e as LayoutOpening));
-  const open = new Set(openings);
-  const closed = LAYOUT_EDGES.filter((edge) => !open.has(edge));
-  const zones = layout.zones
-    .map((z, idx) => {
-      const id = z.id || String.fromCharCode(65 + idx);
-      const xr = `${fmtM(z.x)}-${fmtM(z.x + z.w)}`;
-      const yr = `${fmtM(z.y)}-${fmtM(z.y + z.h)}`;
-      const kind = z.type ? ZONE_TYPE_LABEL[z.type] ?? z.type : 'functional zone';
-      const parts = [
-        `${id}. ${z.name} (${kind})`,
-        `shape=${z.shape ? SHAPE_LABEL[z.shape] ?? z.shape : 'rectangle'}`,
-        `layer=${z.layer ?? 'space/object'}`,
-        `x=${xr}`,
-        `y=${yr}`,
-        `plan size=${fmtM(z.w)} x ${fmtM(z.h)}`,
-        `touches=${touchingEdges(layout, z)}`,
-      ];
-      if (z.height != null) parts.push(`height=${fmtM(z.height)}`);
-      if (z.facing) parts.push(`facing=${z.facing}`);
-      if (z.material) parts.push(`material=${z.material}`);
-      if (z.note) parts.push(`note=${z.note}`);
-      if (z.description) parts.push(`description=${z.description}`);
-      return `${parts.join(', ')}.`;
-    })
-    .join('\n');
-  return `STRUCTURED FLOOR PLAN HARD LOCK:
-Coordinate system is metric and top-down. Origin (0,0) is the BACK-LEFT corner of the booth plan. X runs left-to-right along the ${fmtM(layout.length)} long side. Y runs back-to-front along the ${fmtM(layout.width)} short side. BACK and FRONT are long sides; LEFT and RIGHT are short sides.
-Outer footprint must be one strict rectangle: ${fmtM(layout.length)} x ${fmtM(layout.width)}. Open edges: ${openings.length ? openings.map((e) => `${EDGE_LABEL[e]} (${fmtM(edgeLength(layout, e))})`).join('; ') : 'none stated'}. Closed/wall-adjacent edges: ${closed.map((e) => `${EDGE_LABEL[e]} (${fmtM(edgeLength(layout, e))})`).join('; ') || 'none'}.
-Functional zones, exact positions:
-${zones}
-Use this structured object table as the source of truth. The attached PNG floor plan is only a visual diagram of the same data. Respect every object ID, type, shape, height, facing direction, material, and description. Do not merge unrelated objects into one blob, do not swap left/right, do not move objects to another edge, do not turn the rectangular footprint into a polygon, and do not invent extra walls or protrusions. Interior standees/totems are slim freestanding rectangles inside these coordinates only.`;
-}
 
 // 唯一生图入口（首稿候选 / 用户选定基准后的多视角 / 平面图条件化）。大脑只给中文意图，
 // prompt-writer 子 agent 写英文 prompt；identity / 判图要点自读 spec；出口统一 Deliverable。
@@ -172,7 +102,7 @@ export const render = tool({
     // D32 输入快照：spec/layout 摘要 + 每个 provider 调用前固化一条快照（provider 失败也留证据，不存 base64）。
     const specSummary = { hasSpec: !!s.spec, identity: s.spec?.identity, invariants: s.spec?.invariants, selfCheckCriteria: s.spec?.selfCheckCriteria, updatedAt: s.spec?.updatedAt };
     const layoutSummary = s.layout ? { status: s.layout.status, planAssetId: s.layout.planAssetId, proposal: s.layout.proposal } : undefined;
-    const layoutLock = layoutConstraintText(s.layout?.proposal);
+    const layoutLock = cadPromptLock(s.layout?.proposal);
     const planId = effectivePlanAssetId ?? '';
     // D33：本轮被选用的上传素材（selectedAttachments 优先，空则 fallback 用分析推导的可用素材）→ 转 snapshot attachment refs。
     const selAtt = s.selectedAttachments?.length ? s.selectedAttachments : await selectUsableAttachmentsFromAnalyses(pid);
@@ -186,7 +116,14 @@ export const render = tool({
     if (effectivePlanAssetId && plan) await markLayoutConfirmed(pid, effectivePlanAssetId);
 
     // ① prompt-writer 子 agent：意图 → 英文五层主图 prompt（不占大脑上下文）
-    const frontPrompt = views.length && baseAsset ? '' : await writeImagePrompt({ intent, identity: promptIdentity, kind: mode === 'concept' ? 'concept' : plan ? 'plan' : 'front' });
+    const frontPrompt = views.length && baseAsset
+      ? ''
+      : await writeImagePrompt({
+          intent,
+          identity: promptIdentity,
+          kind: mode === 'concept' ? 'concept' : plan ? 'plan' : 'front',
+          trace: { projectId: pid, runId, purpose: plan ? 'plan-conditioned front prompt' : 'front prompt' },
+        });
     console.log(`[render] mode=${mode}/${plan ? 'plan' : views.length ? 'views' : 'single'} views=${views.length} n=${nn} q=${q} 预计生图≈${requestedImages} 张`);
 
     // ② 首稿候选：只落候选文件，不进正式资产库；用户选中后再 promote 入库。
@@ -209,7 +146,7 @@ export const render = tool({
       totalGenMs += genMs;
       if (!raw.length) return { error: '主图生成失败（按平面图）' };
       for (const b of raw) {
-        const insp = autoCheck ? await inspectImage(b, criteria) : null;
+        const insp = autoCheck ? await inspectImage(b, criteria, { projectId: pid, runId, purpose: 'plan-conditioned candidate check' }) : null;
         const a = await saveCandidateAsset(pid, b, { kind: 'booth-image', prompt: 'plan-conditioned front candidate', parentId: effectivePlanAssetId, inspections: insp ? [toInspectionResult(insp, MODEL_IDS.inspect)] : undefined, provider: providerName, model: imageModel, quality: q, size, mode, durationMs: genMs, renderInputId: snap.id, sourceAssetIds: planId ? [planId] : [], sourceAttachmentIds: attIds });
         heroCands.push({ bytes: b, assetId: a.id, url: a.url, score: insp?.score ?? 0, failN: insp?.fails.length ?? 0 });
       }
@@ -224,7 +161,7 @@ export const render = tool({
       totalGenMs += genMs;
       if (!raw.length) return { error: '主图生成失败（无返回）' };
       for (const b of raw) {
-        const insp = autoCheck ? await inspectImage(b, criteria) : null;
+        const insp = autoCheck ? await inspectImage(b, criteria, { projectId: pid, runId, purpose: 'text-to-image candidate check' }) : null;
         const a = await saveCandidateAsset(pid, b, { kind: 'booth-image', prompt: `${frontPrompt} candidate`, inspections: insp ? [toInspectionResult(insp, MODEL_IDS.inspect)] : undefined, provider: providerName, model: imageModel, quality: q, size, mode, durationMs: genMs, renderInputId: snap.id, sourceAttachmentIds: attIds });
         heroCands.push({ bytes: b, assetId: a.id, url: a.url, score: insp?.score ?? 0, failN: insp?.fails.length ?? 0 });
       }
@@ -299,7 +236,7 @@ export const render = tool({
           issues.push(`${view}：生成失败`);
           continue;
         }
-        const judged = await Promise.all(cands.map(async (b) => ({ b, c: await inspectConsistency(hero.bytes, b, view) })));
+        const judged = await Promise.all(cands.map(async (b) => ({ b, c: await inspectConsistency(hero.bytes, b, view, { projectId: pid, runId, purpose: 'view consistency check' }) })));
         judged.sort((x, y) => y.c.consistencyScore - x.c.consistencyScore);
         const best = judged[0];
         const a = await saveAsset(pid, best.b, { kind: 'booth-image', prompt: `${view} (ref-conditioned checked)`, parentId: hero.assetId, provider: providerName, model: imageModel, quality: q, size, mode, durationMs: genMs, renderInputId: snap.id, sourceAssetIds: refMeta.map((r) => r.id).filter(Boolean), sourceAttachmentIds: attIds });

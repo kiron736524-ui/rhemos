@@ -3,27 +3,29 @@
 读完这一篇 + 它指向的链接，你就能全知识冷启动、抓住每个关键决策点。
 
 ## 心智模型（30 秒）
-单一大脑（Opus 4.8）+ 多工具的 **Loop Agent**。**控制流 = 大脑的推理，不是状态机。** 当前产品默认链路是：澄清 → 写 DesignSpec（含 footprint 外轮廓硬规则）→ 布局确认/跳过 → 首稿 `candidate-set` 两张候选 → 用户点选基准图 → 再按需多视角/俯视/精修。旧 rhemax 的 FSM + 模板被**刻意丢弃**（见 [DECISIONS](DECISIONS.md) D7）；自动判图/一致性检查不是默认流程，只有用户明确要求诊断时启用。
+单一大脑（默认 Sonnet 4.6，可配置升 Opus）+ 多工具的 **Loop Agent**。**控制流 = 大脑的推理，不是状态机。** 当前产品默认链路是：澄清 → 写 DesignSpec（含 footprint 外轮廓硬规则）→ 布局确认/跳过 → 首稿 `candidate-set` 两张候选 → 用户点选基准图 → 再按需多视角/俯视/精修。旧 rhemax 的 FSM + 模板被**刻意丢弃**（见 [DECISIONS](DECISIONS.md) D7）；自动判图/一致性检查不是默认流程，只有用户明确要求诊断时启用。
 
 ## 60 秒定位：想改 X → 去看 Y
 | 想做什么 | 去哪 |
 |---|---|
-| 换模型 / 模型句柄 | `src/models/gateway.ts`（脑 Opus / 文生图和参考条件化 gpt-image-2 经 **fal.ai** / **判图+写prompt Opus** / 清理）+ `src/models/image-providers.ts`（生图 provider 抽象 `textToImage`/`editFromRefs`）；画风锚 `withRenderStyle` |
+| 换模型 / 模型句柄 | `src/models/gateway.ts`（脑默认 Sonnet / prompt-writer 默认 Opus / inspect 默认 Sonnet / 成本解释 DeepSeek / gpt-image-2 经 **fal.ai**）+ `src/models/image-providers.ts`（生图 provider 抽象 `textToImage`/`editFromRefs`）；画风锚 `withRenderStyle` |
 | 改大脑行为 / 工作循环 / 铁律 | `src/agent/system-prompt.ts`（PREAMBLE）|
 | 改领域知识（决策型在大脑 / 执行型在 prompt-writer）| `src/knowledge/skills/*` + `src/knowledge/rubrics/*`（D26 分流：大脑装决策型 7 skill + 2 rubric；写图细节 6 skill 归 `prompt-writer`）|
 | 加 / 改工具 | `src/tools/*.ts` → 注册在 `src/agent/orchestrator.ts` |
 | 循环退出 / 生图预算 / Run 记录 | `src/agent/orchestrator.ts`（`stopWhen` / `imageBudget`）+ `src/app/api/agent/route.ts`（创建 runId、记录 step/finish）+ `src/lib/storage.ts`（runs 文件）|
 | 判图逻辑（结构化打分）| `src/agent/inspect.ts` |
+| 布局机读契约 / CAD 硬锁 | `src/lib/cad.ts`（`BoothLayout` → Rhemos CAD v1；render prompt 的布局 source of truth）|
 | 存储 / 数据形状 / 项目列表 / 业务记忆 | `src/lib/storage.ts`（projectId-keyed + 写锁 + `listProjects`/`deleteProject` + `mergeBrief` 写 brief + 附件/Run/layout 状态 + 删除 tombstone 防复活）+ `src/lib/types.ts` |
-| API 入口 | `src/app/api/agent/route.ts`（Run 创建 + 附件引用预处理 + 历史工具输出瘦身 + tool 入参兜底）；图片读出 `assets/[id]`；附件资产化 `projects/[id]/attachments`；项目列表/删除/状态；语音 `asr` |
+| API 入口 | `src/app/api/agent/route.ts`（Run 创建 + 附件引用预处理 + 历史工具输出/旧文本瘦身 + tool 入参兜底）；图片读出 `assets/[id]`；附件资产化 `projects/[id]/attachments`；项目列表/删除/状态；语音 `asr` |
 | 上传附件资产化 + 提取（docx→文字+内嵌图 / xlsx→CSV，含大小/行数/文本上限）| `src/app/api/projects/[projectId]/attachments/*` + `src/lib/attachments.ts`（mammoth / ExcelJS）|
 | brief 业务记忆写入 | `src/tools/update-brief.ts` + `storage.mergeBrief`（澄清拍板后增量落事实）|
 | 语音输入 ASR | `src/lib/asr/{funasr,cleanup}.ts` + `src/components/VoiceInputButton.tsx` |
 | 前端工作台（三栏暗色科技）| `src/app/projects/[projectId]/page.tsx`（面板 / 对话 / 画廊 / 上传 / **卡片** / **markdown** / lightbox）；`src/app/page.tsx` 仅 redirect→default |
 | 卡片提问 / 选项卡 + 俯视草图 | `src/tools/present-choices.ts` + 前端 `ChoiceCards`/`FloorPlan`（page.tsx）|
 | 布局编辑器（拖拽/缩放/L形/截图喂生图）| `src/components/LayoutEditor.tsx`(react-konva) + `/layout-demo` 演示页；布局 schema/裁剪在 `src/lib/layout.ts` |
-| 生图（**唯一入口**）/ 多视角 / 平面图条件化 | `src/tools/render.ts`（中文意图 → prompt-writer → 首稿 candidate-set / 用户选定 `baseAssetId` 后的多视角 / 平面图条件化；final render 硬要求 spec.identity + layout confirmed/skipped）|
+| 生图（**唯一入口**）/ 多视角 / 平面图条件化 | `src/tools/render.ts`（中文意图 → prompt-writer → CAD v1 布局硬锁 → 首稿 candidate-set / 用户选定 `baseAssetId` 后的多视角 / 平面图条件化；final render 硬要求 spec.identity + layout confirmed/skipped）|
 | 写图 prompt（子 agent）| `src/agent/prompt-writer.ts`（中文意图 → 英文五层 prompt，带执行型知识；中间产物不回流大脑）|
+| 成本归因 / 余额解释 | `src/tools/estimate-cost.ts` + `src/lib/cost-estimate.ts`（读取 run usage；DeepSeek V4 Flash 低成本解释）|
 | 对话持久化 | `src/lib/storage.ts`(conversation) + `api/projects/[id]/messages` + page.tsx 流式存盘 effect |
 | **为什么这么设计** | `docs/DECISIONS.md` |
 | 架构全貌（as-built） | `docs/ARCHITECTURE.md` |
@@ -31,7 +33,7 @@
 | 连通性 / 并发 / 画质实测脚本 | `scripts/*.mjs`（`node --env-file .env.local scripts/<x>.mjs`）|
 
 ## 不变量（不要破坏）
-1. **模型多来源**（不再"唯一经 Gateway"，见 D29/D34）：脑 / 判图 / 写prompt / 清理经 Gateway（`src/models/gateway.ts`）；**gpt-image-2 经 fal.ai**（`falTextToImage`/`falEditFromRefs`，`FAL_API_KEY`）；**ASR 经 DashScope 直连**。生图统一经 `src/models/image-providers.ts` 的 provider 层。
+1. **模型多来源**（不再"唯一经 Gateway"，见 D29/D34/D38）：脑 / 判图 / 写prompt / 成本解释 / 清理经 Gateway（`src/models/gateway.ts`，均可用 `RHEMOS_*_MODEL` 覆盖）；**gpt-image-2 经 fal.ai**（`falTextToImage`/`falEditFromRefs`，`FAL_API_KEY`）；**ASR 经 DashScope 直连**。生图统一经 `src/models/image-providers.ts` 的 provider 层。
 2. **首稿选择权给用户**：首稿默认两张候选，用户选中后才进入资产库并写 `baseAssetId`；不要自动把候选全塞进资产库。
 3. **品牌无素材只占位**、不臆造文字 / Logo。
 4. 知识层是大脑的**参考与判断工具**，不是死板脚本；**不要重建 FSM / blockingField** 那套调度机器。
@@ -49,6 +51,8 @@
 - **文件上传两坑**（`projects/[projectId]/page.tsx`）：① file input 别 `display:none`（Safari 下 `.click()` 不弹文件框）→ 用 `<label htmlFor>` 关联 + `sr-only`；② `onChange` 里 `setFiles` 的 updater 是**延迟闭包**，别在其中读 `e.target.files`（会被同步行 `value=''` 清空）→ 先 `const picked = Array.from(e.target.files ?? [])` 再清空。
 - **多轮 400**：UIMessage 回传后历史里 `tool_use.input` 可能是空串 `""` → Gateway 400。route 的 `sanitizeToolInputs` 把非对象入参兜成 `{}`。
 - **历史工具输出会瘦身后再喂模型**：`conversation.json` 和 UI 历史仍完整，`/api/agent` 发送给模型前把历史 tool 输出压成文字摘要；需要准确事实时让大脑调 `read_project_state`，避免长会话被大段工具 JSON 撑爆。
+- **旧文本也会按预算截断后再喂模型**：最近消息完整保留；旧用户/助手长文本按 `RHEMOS_CONTEXT_*` 限制压缩。项目事实必须落 brief/spec/layout/asset/run，不靠整段聊天全文反复送模型。
+- **成本估算不是查真实账单**：`estimate_cost` 只读本地 run usage；历史 run 缺少 prompt-writer/inspect 隐藏 usage 时会低估，fal 图像费用也要看 fal 账单。
 - **改 `/api/**/route.ts` 后 dev server 热重载可能不生效**：重启或 curl 闭环验证，别只读代码就认定生效（前端 bundle 与 API route 分别编译）。
 - **headless 预览测不了文件上传交互**：合成 click 不弹文件框、合成 change 触发的 onChange 也别"看到事件就算验证"；真实选文件流程交给用户或 Claude-in-Chrome `file_upload` 确认。
 - **图像编辑 / 参考图：走 fal `gpt-image-2/edit`**（`falEditFromRefs`，base64 data URI 多图参考）。当前本地测试版不自动回退 Gemini；`image-providers` 中 openai/seedream/gemini 只是预留接口，调用会清晰报未实现。
@@ -64,7 +68,7 @@
 - **brief 是要主动写的**：`ProjectState.brief` 不会自己填——大脑须在澄清拍板后调 `update_brief` 增量落事实（`storage.mergeBrief`），否则 `read_project_state` 永远读到空 `{}`、跨轮记忆丢失、重复追问。
 
 ## 现状
-Phase 0-4 完成并实测，并经多轮重大升级：**UI 颠覆**（暗色工程制图科技，rhemax 黑红蓝）· **卡片提问 + 布局编辑器**（`present_choices` 可点卡片 + 俯视草图，零打字；react-konva `LayoutEditor` 拖拽精调 → 截图喂生图）· **首稿候选 + 用户选基准**（candidate-set 不进资产库，promote 后写 `baseAssetId`）· **工业级一致性**（identity 锁定 / footprint 外轮廓硬规则 / 画风锚 / 用户基准图参考条件化 / 平面图条件化生图）· **对话持久化 + 附件资产化** · **最小 Run 记录 + final render 代码守卫**。Phase 5（生产化：DB / auth / 成本核算 / 部署 / 长任务队列）未做，见 `engineering-plan.md`。
+Phase 0-4 完成并实测，并经多轮重大升级：**UI 颠覆**（暗色工程制图科技，rhemax 黑红蓝）· **卡片提问 + 布局编辑器**（`present_choices` 可点卡片 + 俯视草图，零打字；react-konva `LayoutEditor` 拖拽精调 → 截图喂生图）· **Rhemos CAD v1 布局契约**（对象级布局变机读硬锁）· **首稿候选 + 用户选基准**（candidate-set 不进资产库，promote 后写 `baseAssetId`）· **工业级一致性**（identity 锁定 / footprint 外轮廓硬规则 / 画风锚 / 用户基准图参考条件化 / 平面图条件化生图）· **对话持久化 + 附件资产化** · **最小 Run 记录 + hidden usage + final render 代码守卫**。Phase 5（生产化：DB / auth / 成本核算 / 部署 / 长任务队列）未做，见 `engineering-plan.md`。
 
 ## 深入阅读顺序
 `docs/ARCHITECTURE.md`（如何建）→ `docs/DECISIONS.md`（为何这么定）→ `docs/engineering-plan.md`（路线图）→ `docs/domain-knowledge.md` + `src/knowledge/README.md`（领域知识层）→ `rhemos-build-plan.md`（最初策略基线）。

@@ -11,6 +11,7 @@ import { updateBrief } from '@/tools/update-brief';
 import { presentChoices } from '@/tools/present-choices';
 import { presentLayout } from '@/tools/present-layout';
 import { render } from '@/tools/render';
+import { estimateCost } from '@/tools/estimate-cost';
 
 // 工具注册表（名字即大脑看到的工具名）
 export const tools = {
@@ -22,6 +23,7 @@ export const tools = {
   present_layout: presentLayout,
   render: render,
   revise_asset: reviseAsset,
+  estimate_cost: estimateCost,
   task_complete: taskComplete,
 };
 
@@ -46,7 +48,7 @@ function imageBudget(maxImages: number): StopCondition<typeof tools> {
 }
 
 /**
- * Orchestrator（单脑 = Opus 4.8）。inspect 在工具内部用 Sonnet 4.6（天然分档）。
+ * Orchestrator（默认单脑 = Sonnet 4.6，可用 RHEMOS_BRAIN_MODEL 升 Opus）。prompt-writer 默认 Opus；inspect 默认 Sonnet。
  * 退出：大脑自己 task_complete。兜底：总生图 ≤5、步数 ≤16。
  */
 export async function orchestratorConfig() {
