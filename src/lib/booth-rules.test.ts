@@ -124,6 +124,22 @@ describe('checkBoothLayout', () => {
     expect(sevOf(issues, 'AREA_OVERSUBSCRIBED')).toBe('fail');
   });
 
+  it('顶部 Truss/detail 不计入地面面积与满铺告警', () => {
+    const layout: BoothLayout = {
+      length: 15,
+      width: 12,
+      openings: ['front', 'left', 'right'],
+      zones: [
+        { name: '后侧品牌墙', type: 'brand', x: 0, y: 0, w: 15, h: 0.6, layer: 'object' },
+        { name: '展车台', type: 'stage', x: 4.5, y: 4.5, w: 6, h: 3.2, layer: 'object' },
+        { name: '顶部 Truss 灯架', type: 'truss', x: 0, y: 0, w: 15, h: 12, height: 5, layer: 'detail' },
+      ],
+    };
+    const issues = checkBoothLayout(layout);
+    expect(has(issues, 'AREA_OVERSUBSCRIBED')).toBe(false);
+    expect(has(issues, 'ZONE_FILLS_BOOTH')).toBe(false);
+  });
+
   // 9. 关键 zone 严重重叠 → fail
   it('关键区严重重叠 → fail(KEY_ZONES_OVERLAP)', () => {
     const layout: BoothLayout = {

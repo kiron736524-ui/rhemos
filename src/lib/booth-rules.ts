@@ -38,6 +38,8 @@ const KEY_TYPES = new Set(['led', 'screen', 'brand', 'wall', 'product', 'showcas
 
 const area = (z: BoothLayoutZone) => Math.max(0, z.w) * Math.max(0, z.h);
 const footprint = (l: BoothLayout) => Math.max(0, l.length) * Math.max(0, l.width);
+const isOverheadOrDetail = (z: BoothLayoutZone) => z.layer === 'detail' || z.type === 'truss';
+const occupiesFloor = (z: BoothLayoutZone) => z.type !== 'aisle' && !isOverheadOrDetail(z);
 
 /** 边的容差：max(0.3m, 该方向尺寸的 8%)。 */
 function edgeTol(l: BoothLayout, axis: 'x' | 'y') {
@@ -139,13 +141,13 @@ export function checkBoothLayout(layout: BoothLayout, ctx: BoothRuleContext = {}
     if (oob) {
       push({ severity: 'fail', code: 'ZONE_OUT_OF_BOUNDS', message: `功能区「${z.name}」越出展台边界`, evidence: { x: z.x, y: z.y, w: z.w, h: z.h }, suggestedFix: '把该区收回展台轮廓内' });
     }
-    if (z.w >= layout.length * 0.98 && z.h >= layout.width * 0.98) {
+    if (occupiesFloor(z) && z.w >= layout.length * 0.98 && z.h >= layout.width * 0.98) {
       push({ severity: 'warning', code: 'ZONE_FILLS_BOOTH', message: `功能区「${z.name}」几乎铺满整个展台，疑似缺少分区`, evidence: { w: z.w, h: z.h } });
     }
   }
 
   // ── 规则 15：所有实体区面积总和 > footprint 110% ──（先算，便于后面引用）
-  const solidArea = zones.filter((z) => z.type !== 'aisle').reduce((s, z) => s + area(z), 0);
+  const solidArea = zones.filter(occupiesFloor).reduce((s, z) => s + area(z), 0);
   if (fp > 0 && solidArea > fp * 1.1) {
     push({
       severity: 'fail',
@@ -157,7 +159,7 @@ export function checkBoothLayout(layout: BoothLayout, ctx: BoothRuleContext = {}
   }
 
   // ── 规则 9：关键区严重重叠 ──
-  const keyZones = zones.filter((z) => z.type && KEY_TYPES.has(z.type));
+  const keyZones = zones.filter((z) => z.type && KEY_TYPES.has(z.type) && !isOverheadOrDetail(z));
   for (let i = 0; i < keyZones.length; i++) {
     for (let j = i + 1; j < keyZones.length; j++) {
       const a = keyZones[i];
@@ -251,7 +253,7 @@ export function checkBoothLayout(layout: BoothLayout, ctx: BoothRuleContext = {}
       }
     }
     // 规则 12：开放边被大面积封闭/高体量区占用
-    if (z.type && BULKY_TYPES.has(z.type)) {
+    if (z.type && BULKY_TYPES.has(z.type) && !isOverheadOrDetail(z)) {
       for (const e of openings) {
         if (hugsEdge(z, layout, e) && edgeSpanFrac(z, layout, e) > 0.6) {
           push({
@@ -270,7 +272,7 @@ export function checkBoothLayout(layout: BoothLayout, ctx: BoothRuleContext = {}
   // ── 规则 4：四面开时高体量会议/储物/品牌墙居中阻断动线 ──
   if (openings.length === 4) {
     for (const z of zones) {
-      if (z.type && BULKY_TYPES.has(z.type) && coversCenter(z, layout) && fp > 0 && area(z) > fp * 0.12) {
+      if (z.type && BULKY_TYPES.has(z.type) && !isOverheadOrDetail(z) && coversCenter(z, layout) && fp > 0 && area(z) > fp * 0.12) {
         push({
           severity: 'fail',
           code: 'CENTER_BLOCKS_CIRCULATION',

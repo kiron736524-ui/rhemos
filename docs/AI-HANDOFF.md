@@ -15,7 +15,7 @@
 | 循环退出 / 生图预算 / Run 记录 | `src/agent/orchestrator.ts`（`stopWhen` / `imageBudget`）+ `src/app/api/agent/route.ts`（创建 runId、记录 step/finish）+ `src/lib/storage.ts`（runs 文件）|
 | 判图逻辑（结构化打分）| `src/agent/inspect.ts` |
 | 存储 / 数据形状 / 项目列表 / 业务记忆 | `src/lib/storage.ts`（projectId-keyed + 写锁 + `listProjects`/`deleteProject` + `mergeBrief` 写 brief + 附件/Run/layout 状态 + 删除 tombstone 防复活）+ `src/lib/types.ts` |
-| API 入口 | `src/app/api/agent/route.ts`（Run 创建 + tool 入参兜底 + 附件引用预处理）；图片读出 `assets/[id]`；附件资产化 `projects/[id]/attachments`；项目列表/删除/状态；语音 `asr` |
+| API 入口 | `src/app/api/agent/route.ts`（Run 创建 + 附件引用预处理 + 历史工具输出瘦身 + tool 入参兜底）；图片读出 `assets/[id]`；附件资产化 `projects/[id]/attachments`；项目列表/删除/状态；语音 `asr` |
 | 上传附件资产化 + 提取（docx→文字+内嵌图 / xlsx→CSV，含大小/行数/文本上限）| `src/app/api/projects/[projectId]/attachments/*` + `src/lib/attachments.ts`（mammoth / ExcelJS）|
 | brief 业务记忆写入 | `src/tools/update-brief.ts` + `storage.mergeBrief`（澄清拍板后增量落事实）|
 | 语音输入 ASR | `src/lib/asr/{funasr,cleanup}.ts` + `src/components/VoiceInputButton.tsx` |
@@ -48,11 +48,12 @@
 - 并行生图后**顺序** `saveAsset`（否则竞写 `state.json`）。
 - **文件上传两坑**（`projects/[projectId]/page.tsx`）：① file input 别 `display:none`（Safari 下 `.click()` 不弹文件框）→ 用 `<label htmlFor>` 关联 + `sr-only`；② `onChange` 里 `setFiles` 的 updater 是**延迟闭包**，别在其中读 `e.target.files`（会被同步行 `value=''` 清空）→ 先 `const picked = Array.from(e.target.files ?? [])` 再清空。
 - **多轮 400**：UIMessage 回传后历史里 `tool_use.input` 可能是空串 `""` → Gateway 400。route 的 `sanitizeToolInputs` 把非对象入参兜成 `{}`。
+- **历史工具输出会瘦身后再喂模型**：`conversation.json` 和 UI 历史仍完整，`/api/agent` 发送给模型前把历史 tool 输出压成文字摘要；需要准确事实时让大脑调 `read_project_state`，避免长会话被大段工具 JSON 撑爆。
 - **改 `/api/**/route.ts` 后 dev server 热重载可能不生效**：重启或 curl 闭环验证，别只读代码就认定生效（前端 bundle 与 API route 分别编译）。
 - **headless 预览测不了文件上传交互**：合成 click 不弹文件框、合成 change 触发的 onChange 也别"看到事件就算验证"；真实选文件流程交给用户或 Claude-in-Chrome `file_upload` 确认。
 - **图像编辑 / 参考图：走 fal `gpt-image-2/edit`**（`falEditFromRefs`，base64 data URI 多图参考）。当前本地测试版不自动回退 Gemini；`image-providers` 中 openai/seedream/gemini 只是预留接口，调用会清晰报未实现。
 - **多视角一致性**：现在默认不跑判图门控。用户选中首稿基准图后，`render(views=[...])` 只用 `baseAssetId` 继续生成；如果用户要求 AI 诊断/一致性检查，再显式 `autoCheck=true`。
-- **平面图条件化最强**：方案定稿 → `present_layout` **自动弹** `LayoutEditor` → 用户拖好 → `toDataURL()` 截图 → `render(planAssetId, views=[], n=2, autoCheck=false)` 先出两张候选，等用户选基准；不要直接出全套。
+- **平面图条件化最强**：方案定稿 → `present_layout` 显示“打开编辑器 / 按原方案出图”入口 → 用户明确打开并拖好 → `toDataURL()` 截图 → `render(planAssetId, views=[], n=2, autoCheck=false)` 先出两张候选，等用户选基准；不要直接出全套。
 - **附件不再进 conversation.json 存 base64**：前端发送前先上传到 `/api/projects/:id/attachments`，UIMessage 只保留 URL；`preprocessAttachments` 发给模型前临时读取、提取或还原。若看到历史对话里还有 data URL，多半是旧消息。
 - **Run 是最小运行记录，不是完整队列**：每轮 agent 写 `.data/projects/<id>/runs/<runId>.json`，可追 step/tool/deliverable/status；真正的取消、重试恢复、成本计价和跨进程队列仍是 Phase 5。
 - **react-konva 要 `dynamic(ssr:false)`**（用 canvas，SSR 报错）；canvas 内对象不是 DOM，preview_click 点不到（要真鼠标）。

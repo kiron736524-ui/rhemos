@@ -38,6 +38,21 @@ const validProjectId = (id: unknown): id is string => typeof id === 'string' && 
 function summarizeOutput(output: unknown): unknown {
   if (!output || typeof output !== 'object') return output;
   const o = output as Record<string, unknown>;
+  if (o._kind === 'choices') {
+    const questions = Array.isArray(o.questions) ? o.questions : [];
+    return { kind: 'choices', questions: questions.length };
+  }
+  if (o._kind === 'layout') {
+    const layout = o.layout as { zones?: unknown[]; length?: unknown; width?: unknown; openings?: unknown } | undefined;
+    return {
+      kind: 'layout',
+      length: layout?.length,
+      width: layout?.width,
+      openings: layout?.openings,
+      zones: Array.isArray(layout?.zones) ? layout.zones.length : 0,
+      ruleIssues: Array.isArray(o.ruleIssues) ? o.ruleIssues.length : 0,
+    };
+  }
   if (Array.isArray(o.assets)) {
     return {
       type: o.type,
@@ -51,13 +66,59 @@ function summarizeOutput(output: unknown): unknown {
   return o;
 }
 
+type PartLike = Record<string, unknown>;
+const TOOL_SUMMARY_MAX = 900;
+
+function isToolPart(part: unknown): part is PartLike {
+  if (!part || typeof part !== 'object') return false;
+  const type = (part as { type?: unknown }).type;
+  return typeof type === 'string' && type.startsWith('tool-');
+}
+
+function shortJson(value: unknown, max = TOOL_SUMMARY_MAX): string {
+  let s: string;
+  try {
+    s = JSON.stringify(value);
+  } catch {
+    s = String(value);
+  }
+  return s.length > max ? `${s.slice(0, max)}…` : s;
+}
+
+function compactMessagesForModel(messages: UIMessage[]): { messages: UIMessage[]; compacted: number } {
+  let compacted = 0;
+  const next = messages.map((msg) => {
+    const parts = (msg as { parts?: unknown[]; role?: string }).parts;
+    if ((msg as { role?: string }).role !== 'assistant' || !Array.isArray(parts)) return msg;
+    const newParts: unknown[] = [];
+    for (const part of parts) {
+      if ((part as { type?: unknown })?.type === 'step-start') continue;
+      if (isToolPart(part) && part.state === 'output-available') {
+        compacted++;
+        const toolName = String(part.type).replace(/^tool-/, '');
+        newParts.push({
+          type: 'text',
+          text: `【历史工具 ${toolName} 已执行】输入摘要：${shortJson(summarizeOutput(part.input))}；输出摘要：${shortJson(summarizeOutput(part.output))}。需要准确项目事实请调用 read_project_state。`,
+        });
+      } else {
+        newParts.push(part);
+      }
+    }
+    return { ...msg, parts: newParts } as UIMessage;
+  });
+  return { messages: next, compacted };
+}
+
 export async function POST(req: Request) {
   const { messages, projectId }: { messages: UIMessage[]; projectId?: string } = await req.json();
   const pid = validProjectId(projectId) ? projectId : 'default';
   const run = await createRun(pid, { imageLimit: RUN_IMAGE_LIMIT });
   const cfg = await orchestratorConfig();
   // docx/xlsx 在服务端提取成文字/图（模型不能直接读它们）；图片/PDF 原样（原生支持）。
-  const modelMessages = await convertToModelMessages(await preprocessAttachments(messages, pid));
+  const preprocessed = await preprocessAttachments(messages, pid);
+  const compacted = compactMessagesForModel(preprocessed);
+  if (compacted.compacted) console.warn(`[agent] 压缩了 ${compacted.compacted} 个历史工具输出（模型上下文瘦身，UI 历史不变）`);
+  const modelMessages = await convertToModelMessages(compacted.messages);
   const fixed = sanitizeToolInputs(modelMessages as never);
   if (fixed) console.warn(`[agent] 修正了 ${fixed} 个非对象 tool 入参 → {}（防 Gateway 400）`);
   const result = streamText({

@@ -7,11 +7,12 @@
 ## 现状
 - ✅ **Phase 0-4** Loop Agent 全链路（澄清 → 方案 → 生图 → 判图择优 → 修 → 交付）· projectId 隔离 · 多模态上传 · ASR 语音
 - ✅ **UI 颠覆**：暗色 · 工程制图科技（rhemax 黑红蓝 `#1A1815/#BF4136/#5D85A8`），作品在暗场发光；assistant 走 markdown 渲染
-- ✅ **卡片式提问 + 对象级布局编辑器**：澄清走可点选卡片（零打字）；布局骨架问题一次只问一个，用户选完后再重排下一问；方案定稿后**自动弹 react-konva 布局编辑器**（对象库 / 拖拽 / 缩放 / 属性面板 / 撤销重做 / 规则提示，或一键跳过）→ 截图 + 对象级坐标一起喂生图
+- ✅ **卡片式提问 + 对象级布局编辑器**：澄清走可点选卡片（零打字）；布局骨架问题一次只问一个，用户选完后再重排下一问；方案定稿后显示“打开编辑器 / 按原方案出图”的确认入口，用户明确进入 react-konva 布局编辑器（对象库 / 拖拽 / 缩放 / 属性面板 / 撤销重做 / 规则提示，或一键跳过）→ 截图 + 对象级坐标一起喂生图
 - ✅ **首稿候选机制**：final 首稿默认 `n=2 / quality=medium / autoCheck=false` 并发生成，两张候选先显示在对话中，用户点选后才进入正式资产库并写入 `baseAssetId`
 - ✅ **工业级一致性**：identity 身份锁定 + **footprint 外轮廓硬规则**（未明确异形则默认严格矩形）+ 画风锚 + 用户选定基准图后的参考条件化多视角 + **平面图条件化生图**（编辑器截图 + 对象表硬锁 → 先出候选）
 - ✅ 对话持久化 + **附件资产化**（上传先落 `.data/projects/<id>/attachments`，消息只存引用；发给模型前临时还原 / 提取）
 - ✅ **Run 记录 + 代码层流程守卫**：每轮 `/api/agent` 生成 runId，记录 step/tool/deliverable；final render 必须已有 spec.identity 且布局已确认或明确跳过
+- ✅ **历史上下文瘦身**：对话 UI 与项目状态完整保存，但每轮发给模型前会压缩历史工具输出，避免长会话/Gateway 被大段工具 JSON 撑爆
 - ✅ **质量闭环基础设施**：展台规则引擎单测（Vitest）+ 10 个真实案例回归集（`fixtures/booth-cases`，不调模型）+ `IMAGE_PROVIDER` 可配置（默认 fal）+ 生成耗时/供应商沉淀进 asset/run
 - ✅ **生图输入快照（RenderInputSnapshot）**：每次 render/revise 调模型**前**固化 prompt/provider/质量/refs/spec/layout/规则问题到 `.data/.../render-inputs/`，生成 asset 关联 `renderInputId` → 任一张图都能追溯"由哪些输入产生、能否复现"（不存 base64，不喂回大脑）
 - ✅ **用户素材分析层（AssetAnalysis）**：上传文件**自动**生成结构化分析（文件名/类型启发式 + Office/文本轻量提取，不调 vision/OCR）→ `selectedAttachments` 选材 → render 把素材引用写进快照与 asset 的 `sourceAttachmentIds`；任一张图都能追溯"引用了哪些用户素材、被理解成了什么"（分析失败不阻断上传）

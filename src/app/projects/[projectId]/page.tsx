@@ -374,19 +374,12 @@ type ChoiceData = {
   questions: { key: string; question: string; recommended?: number; options: { label: string; detail?: string; layout?: BoothLayout; issues?: ChoiceIssue[] }[] }[];
 };
 
-// 方案定稿后大脑推来布局 → mount 自动弹编辑器（用此 layout 初始化）+ 卡片可重开 / 跳过。
+// 方案定稿后大脑推来布局 → 给用户一个明确入口：打开编辑器精调 / 按原方案直接出图。
 function LayoutGate({ data, onOpen, onSkip, busy }: { data: { layout: BoothLayout; intro?: string }; onOpen: (l: BoothLayout) => void; onSkip: () => void; busy: boolean }) {
-  const opened = useRef(false);
-  useEffect(() => {
-    if (!opened.current && data.layout) {
-      opened.current = true;
-      onOpen(data.layout); // 方案就绪信号到达即自动弹编辑器（onOpen=openEditor 是 prop，不触发 set-state 规则）
-    }
-  }, [data, onOpen]);
   return (
     <div className="w-full rounded-xl border border-accent/40 bg-accent-soft/25 p-3.5">
       <div className="mono-tag mb-1 text-accent">方案已就绪 · 布局精调</div>
-      <p className="text-[13px] leading-relaxed text-ink-200">{data.intro || '编辑器已弹出——拖拽调整布局，确认后按它出 3D 图；不想调也可直接出。'}</p>
+      <p className="text-[13px] leading-relaxed text-ink-200">{data.intro || '布局已准备好。可以打开编辑器拖拽调整，确认后按它出 3D 图；也可以直接按原方案出图。'}</p>
       <div className="mt-2.5 flex flex-wrap gap-2">
         <button type="button" disabled={busy} onClick={() => onOpen(data.layout)} className="u-press rounded-lg border border-accent/50 bg-accent-soft px-3.5 py-1.5 text-[12.5px] text-accent disabled:opacity-40">
           ✎ 打开编辑器
@@ -952,7 +945,7 @@ export default function Workbench() {
                         }
                         return null;
                       }
-                      // present_layout：方案后推布局 → 自动弹编辑器 + 精调/跳过卡片
+                      // present_layout：方案后推布局 → 用户明确打开编辑器或跳过
                       if (isToolUIPart(part) && getToolName(part) === 'present_layout') {
                         const tp = part as unknown as ToolPartLike;
                         if (tp.state === 'output-available' && tp.output) {

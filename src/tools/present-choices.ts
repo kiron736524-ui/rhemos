@@ -15,17 +15,46 @@ const closedEdges = (layout: BoothLayout): LayoutOpening[] => {
 const edgeLength = (layout: BoothLayout, edge: LayoutOpening): number => (edge === 'front' || edge === 'back' ? layout.length : layout.width);
 const edgeNameZh = (edge: LayoutOpening): string => ({ front: 'front/前边', back: 'back/后边', left: 'left/左边', right: 'right/右边' })[edge];
 
-function layoutLabelIssues(label: string, detail: string | undefined, layout: BoothLayout) {
-  const text = `${label} ${detail ?? ''} ${layout.facing ?? ''} ${layout.zones.map((z) => `${z.name} ${z.note ?? ''}`).join(' ')}`;
-  if (!/(封闭|背墙|主墙|closed|back wall|main wall)/i.test(text)) return [];
+const escapeRegex = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const meterPattern = (n: number): string => {
+  const normalized = Number.isInteger(n) ? `${n}(?:\\.0+)?` : escapeRegex(String(n));
+  return `${normalized}\\s*(?:m|米)`;
+};
+
+function hasClosureClaimNear(text: string, terms: string[]): boolean {
+  const wall = String.raw`(?:封闭|关闭|背墙|主墙|主视觉墙|closed|back wall|main wall)`;
+  const term = `(?:${terms.join('|')})`;
+  return new RegExp(`${wall}.{0,18}${term}|${term}.{0,18}${wall}`, 'i').test(text);
+}
+
+function claimedClosedEdges(text: string): LayoutOpening[] {
+  const edgeClaims = {
+    front: hasClosureClaimNear(text, ['front', '前边', '前侧', '前面', '正面']),
+    back: hasClosureClaimNear(text, ['back', '后边', '后侧', '后面', '背面']),
+    left: hasClosureClaimNear(text, ['left', '左边', '左侧', '左面']),
+    right: hasClosureClaimNear(text, ['right', '右边', '右侧', '右面']),
+  } satisfies Record<LayoutOpening, boolean>;
+  return EDGES.filter((e) => edgeClaims[e]);
+}
+
+export function layoutLabelIssues(label: string, _detail: string | undefined, layout: BoothLayout) {
+  // 只校验 label/facing 中“封闭边/背墙”的明确声明。
+  // detail 往往会同时描述开放边与其它边长；扫描整段会把“开放短边”等背景误判成“封闭短边”。
+  const text = `${label} ${layout.facing ?? ''}`;
+  if (!/(封闭|关闭|背墙|主墙|主视觉墙|closed|back wall|main wall)/i.test(text)) return [];
   const closed = closedEdges(layout);
   if (closed.length !== 1) return [];
   const closedLen = edgeLength(layout, closed[0]);
   const min = Math.min(layout.length, layout.width);
   const max = Math.max(layout.length, layout.width);
-  const saysShort = /短边|short side|12m|12\s*米/i.test(text);
-  const saysLong = /长边|long side|15m|15\s*米/i.test(text);
+  const saysShort = hasClosureClaimNear(text, ['短边', 'short side', meterPattern(min)]);
+  const saysLong = hasClosureClaimNear(text, ['长边', 'long side', meterPattern(max)]);
   const issues: string[] = [];
+  for (const claimedEdges of [claimedClosedEdges(label), claimedClosedEdges(layout.facing ?? '')]) {
+    if (claimedEdges.length === 1 && claimedEdges[0] !== closed[0]) {
+      issues.push(`选项文字说封闭 ${edgeNameZh(claimedEdges[0])}，但 layout 实际关闭的是 ${edgeNameZh(closed[0])}。`);
+    }
+  }
   if (saysShort && Math.abs(closedLen - max) < 0.01 && max !== min) {
     issues.push(`选项文字说封闭短边/约${min}m，但 layout 实际关闭的是 ${edgeNameZh(closed[0])}，长度为 ${closedLen}m（长边）。`);
   }
